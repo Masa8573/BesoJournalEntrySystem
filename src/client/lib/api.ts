@@ -10,13 +10,14 @@ import type {
   JournalEntry,
   User,
   ApiResponse,
+  PaginatedResponse,
 } from '@/types';
 
 // ============================================
 // 汎用APIヘルパー
 // ============================================
 
-async function handleResponse<T>(promise: Promise<any>): Promise<ApiResponse<T>> {
+async function handleResponse<T>(promise: any): Promise<ApiResponse<T>> {
   try {
     const { data, error } = await promise;
     if (error) {
