@@ -6,7 +6,6 @@ import type { JournalEntry } from '@/types';
 
 export default function ExportPage() {
   const navigate = useNavigate();
-  const [selectedPeriod] = useState('all');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [uploadDate] = useState('2026-02-18');

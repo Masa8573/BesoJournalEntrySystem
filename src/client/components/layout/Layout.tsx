@@ -5,7 +5,6 @@ import {
   Upload,
   Scan,
   CheckSquare,
-  ClipboardCheck,
   Download,
   BarChart3,
   FileX,
@@ -24,7 +23,7 @@ import {
 
 interface MenuItem {
   label: string;
-  icon: React.ReactNode;
+  icon?: React.ReactNode;
   path?: string;
   children?: MenuItem[];
 }
@@ -32,6 +31,7 @@ interface MenuItem {
 const menuItems: MenuItem[] = [
   {
     label: '業務',
+    icon: <Building2 size={18} />,
     children: [
       { label: '顧客一覧', icon: <Users size={18} />, path: '/clients' },
       { label: '証憑アップロード', icon: <Upload size={18} />, path: '/upload' },
@@ -44,6 +44,7 @@ const menuItems: MenuItem[] = [
   },
   {
     label: 'マスタ管理',
+    icon: <Settings size={18} />,
     children: [
       { label: 'ルール管理', icon: <Settings size={18} />, path: '/master/rules' },
       { label: '勘定科目管理', icon: <List size={18} />, path: '/master/accounts' },

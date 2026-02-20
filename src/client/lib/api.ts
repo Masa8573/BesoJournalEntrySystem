@@ -10,7 +10,7 @@ import type {
   JournalEntry,
   User,
   ApiResponse,
-  PaginatedResponse,
+  //PaginatedResponse,
 } from '@/types';
 
 // ============================================

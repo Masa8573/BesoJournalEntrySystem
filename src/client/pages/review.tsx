@@ -50,7 +50,7 @@ export default function ReviewPage() {
     });
   };
 
-  const handleSave = async (id: string) => {
+  const handleSave = async (_id: string) => {
     const response = await journalEntriesApi.update(id, editForm);
     if (response.data) {
       await loadData();
@@ -64,14 +64,14 @@ export default function ReviewPage() {
     setEditForm({});
   };
 
-  const handleApprove = async (id: string) => {
+  const handleApprove = async (_id: string) => {
     const response = await journalEntriesApi.update(id, { status: 'approved' });
     if (response.data) {
       await loadData();
     }
   };
 
-  const handleReject = async (id: string) => {
+  const handleReject = async (_id: string) => {
     if (window.confirm('この仕訳を削除しますか？')) {
       await journalEntriesApi.delete(id);
       await loadData();
