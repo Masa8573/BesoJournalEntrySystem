@@ -51,7 +51,7 @@ export default function ReviewPage() {
   };
 
   const handleSave = async (_id: string) => {
-    const response = await journalEntriesApi.update(id, editForm);
+    const response = await journalEntriesApi.update(_id, editForm);
     if (response.data) {
       await loadData();
       setEditingId(null);
@@ -65,7 +65,7 @@ export default function ReviewPage() {
   };
 
   const handleApprove = async (_id: string) => {
-    const response = await journalEntriesApi.update(id, { status: 'approved' });
+    const response = await journalEntriesApi.update(_id, { status: 'approved' });
     if (response.data) {
       await loadData();
     }
@@ -73,7 +73,7 @@ export default function ReviewPage() {
 
   const handleReject = async (_id: string) => {
     if (window.confirm('この仕訳を削除しますか？')) {
-      await journalEntriesApi.delete(id);
+      await journalEntriesApi.delete(_id);
       await loadData();
     }
   };
