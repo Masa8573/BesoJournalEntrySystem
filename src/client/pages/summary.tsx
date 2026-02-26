@@ -1,132 +1,106 @@
-import { FileText, CheckCircle, XCircle, Clock } from 'lucide-react';
+import { CheckCircle, AlertCircle, TrendingUp } from 'lucide-react';
+import { useWorkflow } from '@/client/context/WorkflowContext';
+import ProgressBar from '@/client/components/workflow/ProgressBar';
+import WorkflowNavigation from '@/client/components/workflow/WorkflowNavigation';
 
 export default function SummaryPage() {
-  const uploadDate = '2026-02-18';
+  const { currentWorkflow } = useWorkflow();
 
-  const summary = {
-    totalDocuments: 1,
-    totalEntries: 1,
-    excludedDocuments: 0,
-    daysLeft: 0,
-  };
+  // ワークフロー外からのアクセスを防ぐ
+  if (!currentWorkflow) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full">
+        <div className="text-center max-w-md">
+          <AlertCircle size={64} className="text-yellow-500 mx-auto mb-4" />
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">ワークフローが開始されていません</h2>
+          <p className="text-gray-600 mb-6">
+            集計・チェックを行うには、顧客一覧からワークフローを開始してください。
+          </p>
+          <a href="/clients" className="btn-primary">
+            顧客一覧へ戻る
+          </a>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-6">
-      {/* ページヘッダー */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">証憑・仕訳集計</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          山田太郎 - アップロード日別の証憑数と仕訳数の集計
-        </p>
-      </div>
+    <div className="flex flex-col h-screen">
+      <ProgressBar />
 
-      {/* サマリーカード */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="card">
-          <div className="flex items-center gap-2 mb-2">
-            <FileText size={20} className="text-blue-600" />
-            <h3 className="text-sm font-medium text-gray-600">証憑 (対象外除く)</h3>
+      <div className="flex-1 overflow-y-auto p-6">
+        <div className="max-w-5xl mx-auto space-y-6">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">集計・チェック</h1>
+            <p className="text-sm text-gray-500 mt-1">
+              {currentWorkflow.clientName}さん - 仕訳データの集計結果を確認します
+            </p>
           </div>
-          <div className="text-3xl font-bold text-gray-900">{summary.totalDocuments}</div>
-          <div className="text-xs text-gray-500 mt-1">枚</div>
-        </div>
 
-        <div className="card">
-          <div className="flex items-center gap-2 mb-2">
-            <CheckCircle size={20} className="text-green-600" />
-            <h3 className="text-sm font-medium text-gray-600">仕訳数</h3>
+          {/* サマリー */}
+          <div className="grid grid-cols-4 gap-4">
+            <div className="card">
+              <h3 className="text-sm font-medium text-gray-600 mb-2">総仕訳数</h3>
+              <div className="text-3xl font-bold text-gray-900">12</div>
+            </div>
+            <div className="card">
+              <h3 className="text-sm font-medium text-gray-600 mb-2">収入</h3>
+              <div className="text-2xl font-bold text-blue-600">¥350,000</div>
+            </div>
+            <div className="card">
+              <h3 className="text-sm font-medium text-gray-600 mb-2">支出</h3>
+              <div className="text-2xl font-bold text-red-600">¥48,000</div>
+            </div>
+            <div className="card">
+              <h3 className="text-sm font-medium text-gray-600 mb-2">差額</h3>
+              <div className="text-2xl font-bold text-green-600">¥302,000</div>
+            </div>
           </div>
-          <div className="text-3xl font-bold text-gray-900">{summary.totalEntries}</div>
-          <div className="text-xs text-gray-500 mt-1">件</div>
-        </div>
 
-        <div className="card">
-          <div className="flex items-center gap-2 mb-2">
-            <XCircle size={20} className="text-red-600" />
-            <h3 className="text-sm font-medium text-gray-600">対象外証憑</h3>
-          </div>
-          <div className="text-3xl font-bold text-gray-900">{summary.excludedDocuments}</div>
-          <div className="text-xs text-gray-500 mt-1">枚</div>
-        </div>
-
-        <div className="card">
-          <div className="flex items-center gap-2 mb-2">
-            <Clock size={20} className="text-orange-600" />
-            <h3 className="text-sm font-medium text-gray-600">差分のある日</h3>
-          </div>
-          <div className="text-3xl font-bold text-gray-900">{summary.daysLeft}</div>
-          <div className="text-xs text-gray-500 mt-1">日</div>
-        </div>
-      </div>
-
-      {/* 日別集計テーブル */}
-      <div className="card">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">日時別集計</h2>
-        <p className="text-sm text-gray-500 mb-4">
-          アップロード日時と証憑数と仕訳数を表示します
-        </p>
-
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                  アップロード日
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                  時間
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                  証憑数
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                  仕訳数
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                  対象外
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                  進捗
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                  ステータス
-                </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">
-                  操作
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              <tr className="hover:bg-gray-50">
-                <td className="px-4 py-4 text-sm text-gray-900">{uploadDate}</td>
-                <td className="px-4 py-4 text-sm text-gray-900">01:28</td>
-                <td className="px-4 py-4 text-sm text-gray-900">1枚</td>
-                <td className="px-4 py-4 text-sm text-gray-900">1件</td>
-                <td className="px-4 py-4 text-sm text-gray-900">0枚</td>
-                <td className="px-4 py-4">
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1 bg-gray-200 rounded-full h-2 overflow-hidden">
-                      <div className="bg-blue-600 h-full" style={{ width: '100%' }}></div>
+          {/* 勘定科目別集計 */}
+          <div className="card">
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">勘定科目別集計</h2>
+            <div className="space-y-3">
+              {[
+                { name: '燃料費', amount: 24000, percent: 50 },
+                { name: '消耗品費', amount: 12000, percent: 25 },
+                { name: '通信費', amount: 8000, percent: 17 },
+                { name: 'その他', amount: 4000, percent: 8 },
+              ].map((item) => (
+                <div key={item.name} className="flex items-center gap-4">
+                  <div className="w-32 text-sm font-medium text-gray-700">{item.name}</div>
+                  <div className="flex-1 bg-gray-200 rounded-full h-6 overflow-hidden">
+                    <div
+                      className="bg-blue-500 h-full flex items-center justify-end pr-2"
+                      style={{ width: `${item.percent}%` }}
+                    >
+                      <span className="text-xs text-white font-medium">{item.percent}%</span>
                     </div>
-                    <span className="text-sm font-medium text-gray-700">100%</span>
                   </div>
-                </td>
-                <td className="px-4 py-4">
-                  <span className="inline-flex items-center gap-1 badge badge-green">
-                    <CheckCircle size={14} />
-                    完了
-                  </span>
-                </td>
-                <td className="px-4 py-4 text-right">
-                  <button className="px-3 py-1 text-sm text-blue-600 hover:bg-blue-50 rounded">
-                    CSV
-                  </button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+                  <div className="w-24 text-sm font-bold text-gray-900 text-right">
+                    ¥{item.amount.toLocaleString()}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 完了メッセージ */}
+          <div className="card bg-green-50 border-green-200">
+            <div className="flex items-center gap-3">
+              <CheckCircle size={32} className="text-green-600" />
+              <div>
+                <h3 className="font-semibold text-green-900">集計完了</h3>
+                <p className="text-sm text-green-700">
+                  データに問題がなければ、次のステップに進んでください。
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
+
+      <WorkflowNavigation nextLabel="対象外証憑へ" />
     </div>
   );
 }

@@ -33,5 +33,10 @@ lerna-debug.log*
 .next
 out
 
+# アップロードファイル
+uploads/
+uploads/*
+!uploads/.gitkeep
+
 # TypeScript
 *.tsbuildinfo

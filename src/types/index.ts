@@ -74,7 +74,7 @@ export interface TaxCategory {
 
 export interface Tag {
   id: string;
-  type: 'supplier' | 'item';
+  tag_type: 'supplier' | 'item';
   name: string;
   color: string | null;
   description: string | null;

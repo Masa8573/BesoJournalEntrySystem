@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Search, Plus, Edit, Trash2, ChevronRight } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Search, Plus, Edit, Trash2, Play, RotateCcw } from 'lucide-react';
 import { clientsApi, industriesApi } from '@/client/lib/mockApi';
+import { useWorkflow } from '@/client/context/WorkflowContext';
 import type { Client, Industry } from '@/types';
 import Modal from '@/client/components/ui/Modal';
 
@@ -10,11 +10,13 @@ interface ClientWithIndustry extends Client {
 }
 
 export default function ClientsPage() {
+  const { startWorkflow, resumeWorkflow, getAllWorkflows } = useWorkflow();
   const [clients, setClients] = useState<ClientWithIndustry[]>([]);
   const [industries, setIndustries] = useState<Industry[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [editingClient, setEditingClient] = useState<ClientWithIndustry | null>(null);
   
   // フォーム状態
   const [formData, setFormData] = useState({
@@ -47,37 +49,97 @@ export default function ClientsPage() {
     }
   };
 
+  // 新規登録モーダルを開く
+  const handleOpenNewModal = () => {
+    setEditingClient(null);
+    setFormData({
+      name: '',
+      industry_id: '',
+      annual_sales: '',
+      tax_category: '原則課税',
+      invoice_registered: false,
+      use_custom_rules: false,
+    });
+    setShowModal(true);
+  };
+
+  // 編集モーダルを開く
+  const handleOpenEditModal = (client: ClientWithIndustry) => {
+    setEditingClient(client);
+    setFormData({
+      name: client.name,
+      industry_id: client.industry_id || '',
+      annual_sales: client.annual_sales?.toString() || '',
+      tax_category: client.tax_category,
+      invoice_registered: client.invoice_registered,
+      use_custom_rules: client.use_custom_rules,
+    });
+    setShowModal(true);
+  };
+
+  // 送信処理
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    const newClient = {
+    const clientData = {
       ...formData,
       organization_id: 'org-1',
       annual_sales: formData.annual_sales ? Number(formData.annual_sales) : null,
       status: 'active' as const,
     };
 
-    const response = await clientsApi.create(newClient);
-    
-    if (response.data) {
-      alert('顧客を登録しました');
-      setShowModal(false);
-      setFormData({
-        name: '',
-        industry_id: '',
-        annual_sales: '',
-        tax_category: '原則課税',
-        invoice_registered: false,
-        use_custom_rules: false,
-      });
-      loadClients();
+    if (editingClient) {
+      // 編集
+      const response = await clientsApi.update(editingClient.id, clientData);
+      if (response.data) {
+        alert('顧客情報を更新しました');
+        setShowModal(false);
+        setEditingClient(null);
+        loadClients();
+      }
+    } else {
+      // 新規登録
+      const response = await clientsApi.create(clientData);
+      if (response.data) {
+        alert('顧客を登録しました');
+        setShowModal(false);
+        loadClients();
+      }
     }
+  };
+
+  // 削除処理
+  const handleDelete = async (client: ClientWithIndustry) => {
+    if (!window.confirm(`「${client.name}」を削除しますか？\n\nこの操作は取り消せません。`)) {
+      return;
+    }
+
+    const response = await clientsApi.delete(client.id);
+    if (response.error === null) {
+      alert('顧客を削除しました');
+      loadClients();
+    } else {
+      alert('削除に失敗しました');
+    }
+  };
+
+  // ワークフロー開始
+  const handleStartWorkflow = (client: ClientWithIndustry) => {
+    startWorkflow(client.id, client.name);
   };
 
   const filteredClients = clients.filter((client) =>
     client.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     client.industry?.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  // 進行中のワークフロー取得
+  const activeWorkflows = getAllWorkflows();
+
+  // 顧客ごとのワークフロー状態を取得
+  const getWorkflowForClient = (clientId: string) => {
+    return activeWorkflows.find(w => w.clientId === clientId);
+  };
 
   const formatCurrency = (amount: number | null) => {
     if (!amount) return '¥0';
@@ -106,13 +168,72 @@ export default function ClientsPage() {
           </p>
         </div>
         <button
-          onClick={() => setShowModal(true)}
+          onClick={handleOpenNewModal}
           className="flex items-center gap-2 btn-primary"
         >
           <Plus size={18} />
           <span>新規顧客登録</span>
         </button>
       </div>
+
+      {/* 進行中のワークフロー */}
+      {activeWorkflows.length > 0 && (
+        <div className="card bg-blue-50 border-blue-200">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-blue-900">
+              📌 進行中のワークフロー ({activeWorkflows.length}件)
+            </h2>
+          </div>
+
+          <div className="space-y-3">
+            {activeWorkflows.map((workflow) => (
+              <div
+                key={workflow.id}
+                className="flex items-center justify-between p-4 bg-white rounded-lg border border-blue-200"
+              >
+                <div className="flex-1">
+                  <h3 className="font-semibold text-gray-900 mb-1">{workflow.clientName}</h3>
+                  <div className="flex items-center gap-4 text-sm">
+                    <span className="text-gray-600">
+                      進捗: {workflow.completedSteps.length}/8 ステップ完了
+                    </span>
+                    <span className="text-gray-500">
+                      最終更新: {new Date(workflow.lastUpdated).toLocaleString('ja-JP')}
+                    </span>
+                  </div>
+                  {/* プログレスバー */}
+                  <div className="mt-2 w-full bg-gray-200 rounded-full h-2">
+                    <div
+                      className="bg-blue-600 h-2 rounded-full transition-all"
+                      style={{ width: `${(workflow.completedSteps.length / 8) * 100}%` }}
+                    ></div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 ml-4">
+                  <button
+                    onClick={() => resumeWorkflow(workflow.id)}
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                  >
+                    <RotateCcw size={16} />
+                    続きから
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (window.confirm('このワークフローを削除しますか？')) {
+                        // TODO: ワークフロー削除機能
+                      }
+                    }}
+                    className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                  >
+                    <Trash2 size={18} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 顧客一覧カード */}
       <div className="card">
@@ -156,7 +277,7 @@ export default function ClientsPage() {
                   インボイス
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  ルール追加
+                  ステータス
                 </th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                   操作
@@ -171,80 +292,109 @@ export default function ClientsPage() {
                   </td>
                 </tr>
               ) : (
-                filteredClients.map((client) => (
-                  <tr
-                    key={client.id}
-                    className="hover:bg-gray-50 cursor-pointer transition-colors"
-                  >
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm font-medium text-gray-900">{client.name}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">{client.industry?.name || '-'}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">{formatCurrency(client.annual_sales)}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span
-                        className={`badge ${
-                          client.tax_category === '原則課税'
-                            ? 'badge-blue'
-                            : client.tax_category === '簡易課税'
-                            ? 'badge-green'
-                            : 'badge-gray'
-                        }`}
-                      >
-                        {client.tax_category}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span
-                        className={`badge ${
-                          client.invoice_registered ? 'badge-green' : 'badge-gray'
-                        }`}
-                      >
-                        {client.invoice_registered ? '取得済' : '未取得'}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span
-                        className={`badge ${
-                          client.use_custom_rules ? 'badge-green' : 'badge-gray'
-                        }`}
-                      >
-                        {client.use_custom_rules ? 'ON' : 'OFF'}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      <div className="flex items-center justify-end gap-2">
-                        <button className="p-1 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors">
-                          <Edit size={18} />
-                        </button>
-                        <button className="p-1 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded transition-colors">
-                          <Trash2 size={18} />
-                        </button>
-                        <Link
-                          to={`/clients/${client.id}`}
-                          className="p-1 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                filteredClients.map((client) => {
+                  const workflow = getWorkflowForClient(client.id);
+                  const hasActiveWorkflow = !!workflow;
+
+                  return (
+                    <tr
+                      key={client.id}
+                      className="hover:bg-gray-50 transition-colors"
+                    >
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm font-medium text-gray-900">{client.name}</div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm text-gray-900">{client.industry?.name || '-'}</div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm text-gray-900">{formatCurrency(client.annual_sales)}</div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span
+                          className={`badge ${
+                            client.tax_category === '原則課税'
+                              ? 'badge-blue'
+                              : client.tax_category === '簡易課税'
+                              ? 'badge-green'
+                              : 'badge-gray'
+                          }`}
                         >
-                          <ChevronRight size={18} />
-                        </Link>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                          {client.tax_category}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span
+                          className={`badge ${
+                            client.invoice_registered ? 'badge-green' : 'badge-gray'
+                          }`}
+                        >
+                          {client.invoice_registered ? '取得済' : '未取得'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {hasActiveWorkflow ? (
+                          <span className="badge badge-orange">
+                            進行中 ({workflow.currentStep}/8)
+                          </span>
+                        ) : (
+                          <span className="badge badge-gray">
+                            待機中
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        <div className="flex items-center justify-end gap-2">
+                          {hasActiveWorkflow ? (
+                            <button
+                              onClick={() => resumeWorkflow(workflow.id)}
+                              className="flex items-center gap-1 px-3 py-1.5 bg-orange-500 text-white text-xs font-medium rounded hover:bg-orange-600 transition-colors"
+                            >
+                              <RotateCcw size={14} />
+                              続きから
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleStartWorkflow(client)}
+                              className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700 transition-colors"
+                            >
+                              <Play size={14} />
+                              開始
+                            </button>
+                          )}
+                          <button 
+                            onClick={() => handleOpenEditModal(client)}
+                            className="p-1 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                            title="編集"
+                          >
+                            <Edit size={18} />
+                          </button>
+                          <button 
+                            onClick={() => handleDelete(client)}
+                            className="p-1 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                            title="削除"
+                          >
+                            <Trash2 size={18} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* 新規登録モーダル */}
+      {/* 新規登録・編集モーダル */}
       <Modal
         isOpen={showModal}
-        onClose={() => setShowModal(false)}
-        title="新規顧客登録"
+        onClose={() => {
+          setShowModal(false);
+          setEditingClient(null);
+        }}
+        title={editingClient ? '顧客情報編集' : '新規顧客登録'}
         size="lg"
       >
         <form onSubmit={handleSubmit} className="space-y-6">
@@ -349,13 +499,16 @@ export default function ClientsPage() {
           <div className="flex justify-end gap-3 pt-4 border-t">
             <button
               type="button"
-              onClick={() => setShowModal(false)}
+              onClick={() => {
+                setShowModal(false);
+                setEditingClient(null);
+              }}
               className="btn-secondary"
             >
               キャンセル
             </button>
             <button type="submit" className="btn-primary">
-              登録する
+              {editingClient ? '更新する' : '登録する'}
             </button>
           </div>
         </form>

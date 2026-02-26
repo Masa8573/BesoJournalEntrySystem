@@ -15,6 +15,7 @@ export default function RulesPage() {
   const [activeTab, setActiveTab] = useState<'all' | 'shared' | 'industry' | 'client'>('all');
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [editingRule, setEditingRule] = useState<Rule | null>(null);
 
   const [formData, setFormData] = useState({
     priority: '',
@@ -51,9 +52,41 @@ export default function RulesPage() {
     setLoading(false);
   };
 
+  // 新規登録モーダルを開く
+  const handleOpenNewModal = () => {
+    setEditingRule(null);
+    resetForm();
+    setShowModal(true);
+  };
+
+  // 編集モーダルを開く
+  const handleOpenEditModal = (rule: Rule) => {
+    setEditingRule(rule);
+    
+    // scopeの判定
+    let scope: 'shared' | 'industry' | 'client' = 'shared';
+    if (rule.client_id) scope = 'client';
+    else if (rule.industry_id) scope = 'industry';
+    
+    setFormData({
+      priority: rule.priority.toString(),
+      rule_type: rule.rule_type,
+      scope: scope,
+      industry_id: rule.industry_id || '',
+      client_id: rule.client_id || '',
+      supplier_pattern: rule.supplier_pattern || '',
+      amount_min: rule.amount_min?.toString() || '',
+      amount_max: rule.amount_max?.toString() || '',
+      account_item_id: rule.account_item_id || '',
+      tax_category_id: rule.tax_category_id || '',
+    });
+    setShowModal(true);
+  };
+
+  // 送信処理
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const newRule = {
+    const ruleData = {
       priority: Number(formData.priority),
       rule_type: formData.rule_type,
       industry_id: formData.scope === 'industry' ? formData.industry_id : null,
@@ -66,11 +99,36 @@ export default function RulesPage() {
       status: 'active' as const,
     };
 
-    await rulesApi.create(newRule);
-    alert('ルールを登録しました');
+    if (editingRule) {
+      // 編集
+      await rulesApi.update(editingRule.id, ruleData);
+      alert('ルールを更新しました');
+    } else {
+      // 新規登録
+      await rulesApi.create(ruleData);
+      alert('ルールを登録しました');
+    }
+    
     setShowModal(false);
+    setEditingRule(null);
     resetForm();
     loadData();
+  };
+
+  // 削除処理
+  const handleDelete = async (rule: Rule) => {
+    const scopeName = rule.client_id ? '顧客別' : rule.industry_id ? '業種別' : '共通';
+    if (!window.confirm(`${scopeName}ルール「優先度${rule.priority}」を削除しますか？\n\nこの操作は取り消せません。`)) {
+      return;
+    }
+
+    const response = await rulesApi.delete(rule.id);
+    if (response.error === null) {
+      alert('ルールを削除しました');
+      loadData();
+    } else {
+      alert('削除に失敗しました');
+    }
   };
 
   const resetForm = () => {
@@ -159,7 +217,7 @@ export default function RulesPage() {
             <span className="text-sm font-medium text-gray-700">重複チェック</span>
           </button>
           <button
-            onClick={() => setShowModal(true)}
+            onClick={handleOpenNewModal}
             className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
           >
             <Plus size={18} />
@@ -307,10 +365,18 @@ export default function RulesPage() {
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center justify-end gap-1">
-                          <button className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                          <button 
+                            onClick={() => handleOpenEditModal(rule)}
+                            className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                            title="編集"
+                          >
                             <Edit size={18} />
                           </button>
-                          <button className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                          <button 
+                            onClick={() => handleDelete(rule)}
+                            className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                            title="削除"
+                          >
                             <Trash2 size={18} />
                           </button>
                         </div>
@@ -325,7 +391,15 @@ export default function RulesPage() {
       </div>
 
       {/* モーダル */}
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="新規ルール作成" size="xl">
+      <Modal 
+        isOpen={showModal} 
+        onClose={() => {
+          setShowModal(false);
+          setEditingRule(null);
+        }} 
+        title={editingRule ? 'ルール編集' : '新規ルール作成'} 
+        size="xl"
+      >
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="grid grid-cols-2 gap-6">
             <div>
@@ -434,9 +508,20 @@ export default function RulesPage() {
           </div>
 
           <div className="flex justify-end gap-3 pt-4 border-t">
-            <button type="button" onClick={() => { setShowModal(false); resetForm(); }}
-              className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">キャンセル</button>
-            <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">登録</button>
+            <button 
+              type="button" 
+              onClick={() => { 
+                setShowModal(false); 
+                setEditingRule(null);
+                resetForm(); 
+              }}
+              className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+            >
+              キャンセル
+            </button>
+            <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+              {editingRule ? '更新' : '登録'}
+            </button>
           </div>
         </form>
       </Modal>

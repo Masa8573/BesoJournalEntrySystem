@@ -1,6 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import apiRouter from './api';
 
 // 環境変数を読み込み
@@ -8,6 +10,10 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// ES Modules用の__dirnameの代替
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // ミドルウェア設定
 app.use(cors({
@@ -26,6 +32,17 @@ app.use((req, res, next) => {
 // APIルートをマウント
 app.use('/api', apiRouter);
 
+// 静的ファイル配信（本番環境）
+if (process.env.NODE_ENV === 'production') {
+  const distPath = path.join(__dirname, '../../dist');
+  app.use(express.static(distPath));
+  
+  // React Routerのため、全てのルートでindex.htmlを返す
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
+}
+
 // ルートエンドポイント
 app.get('/', (req, res) => {
   res.json({
@@ -41,6 +58,11 @@ app.get('/', (req, res) => {
     },
     status: 'running',
   });
+});
+
+// ヘルスチェックエンドポイント（UptimeRobot用）
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
 // エラーハンドリングミドルウェア

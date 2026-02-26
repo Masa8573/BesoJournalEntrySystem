@@ -5,6 +5,7 @@ import {
   Upload,
   Scan,
   CheckSquare,
+  Eye,
   Download,
   BarChart3,
   FileX,
@@ -28,20 +29,28 @@ interface MenuItem {
   children?: MenuItem[];
 }
 
+
 const menuItems: MenuItem[] = [
-  {
+    {
     label: '業務',
     icon: <Building2 size={18} />,
     children: [
-      { label: '顧客一覧', icon: <Users size={18} />, path: '/clients' },
-      { label: '証憑アップロード', icon: <Upload size={18} />, path: '/upload' },
-      { label: 'OCR処理', icon: <Scan size={18} />, path: '/ocr' },
-      { label: 'AIチェック', icon: <CheckSquare size={18} />, path: '/review' },
-      { label: '仕訳出力', icon: <Download size={18} />, path: '/export' },
-      { label: '集計・チェック', icon: <BarChart3 size={18} />, path: '/summary' },
-      { label: '対象外証憑', icon: <FileX size={18} />, path: '/excluded' },
+      { label: '顧客一覧', 
+        icon: <Users size={18} />, 
+        path: '/clients',
+        children: [
+          { label: '証憑アップロード', icon: <Upload size={18} />, path: '/upload' },
+          { label: 'OCR処理', icon: <Scan size={18} />, path: '/ocr' },
+          { label: 'AIチェック', icon: <CheckSquare size={18} />, path: '/aicheck' },      
+          { label: '仕訳確認', icon: <Eye size={18} />, path: '/review' },
+          { label: '仕訳出力', icon: <Download size={18} />, path: '/export' },
+          { label: '集計・チェック', icon: <BarChart3 size={18} />, path: '/summary' },
+          { label: '対象外証憑', icon: <FileX size={18} />, path: '/excluded' }
+        ]
+      },
     ],
   },
+
   {
     label: 'マスタ管理',
     icon: <Settings size={18} />,
@@ -56,12 +65,14 @@ const menuItems: MenuItem[] = [
   },
 ];
 
+
 // サイドバーコンポーネント
 function Sidebar() {
   const location = useLocation();
   const [expandedSections, setExpandedSections] = useState<{ [key: string]: boolean }>({
     '業務': true,
-    'マスタ管理': false,
+    'サブ業務': true,
+    'マスタ管理': true,
   });
 
   const toggleSection = (label: string) => {
@@ -79,7 +90,7 @@ function Sidebar() {
       <div className="p-4 border-b border-gray-200">
         <div className="flex items-center gap-2">
           <Building2 className="text-blue-600" size={24} />
-          <h1 className="text-lg font-semibold text-gray-900">経理自動化</h1>
+          <h1 className="text-lg font-semibold text-gray-900">仕訳自動化システム</h1>
         </div>
       </div>
 
@@ -87,7 +98,7 @@ function Sidebar() {
       <nav className="p-2">
         {menuItems.map((section) => (
           <div key={section.label} className="mb-1">
-            {/* セクションヘッダー */}
+            {/* セクションヘッダー（第1階層） */}
             <button
               onClick={() => toggleSection(section.label)}
               className="w-full flex items-center justify-between px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
@@ -100,27 +111,64 @@ function Sidebar() {
               )}
             </button>
 
-            {/* サブメニュー */}
+            {/* サブメニュー（第2階層） */}
             {expandedSections[section.label] && section.children && (
               <div className="mt-1 space-y-1">
                 {section.children.map((item) => (
-                  <Link
-                    key={item.path}
-                    to={item.path || '#'}
-                    className={`
-                      flex items-center gap-2 px-3 py-2 ml-2 text-sm rounded-md transition-colors
-                      ${
-                        isActive(item.path || '')
-                          ? 'bg-blue-50 text-blue-700 font-medium'
-                          : 'text-gray-700 hover:bg-gray-100'
-                      }
-                    `}
-                  >
-                    <span className={isActive(item.path || '') ? 'text-blue-600' : 'text-gray-500'}>
-                      {item.icon}
-                    </span>
-                    <span>{item.label}</span>
-                  </Link>
+                  <div key={item.label}>
+                    {/* 第2階層のリンク */}
+                    <Link
+                      to={item.path || '#'}
+                      className={`
+                        flex items-center gap-2 px-3 py-2 ml-2 text-sm rounded-md transition-colors
+                        ${
+                          isActive(item.path || '')
+                            ? 'bg-blue-50 text-blue-700 font-medium'
+                            : 'text-gray-700 hover:bg-gray-100'
+                        }
+                      `}
+                    >
+                      <span className={isActive(item.path || '') ? 'text-blue-600' : 'text-gray-500'}>
+                        {item.icon}
+                      </span>
+                      <span>{item.label}</span>
+                    </Link>
+
+                    {/* 孫メニュー（第3階層: ├ └ の表示部分） */}
+                    {item.children && (
+                      <div className="mt-1 space-y-1">
+                        {item.children?.map((subItem, index, array) => {
+                          // 配列の最後かどうかを判定
+                          const isLast = index === array.length - 1;
+                          
+                          return (
+                            <Link
+                              key={subItem.path}
+                              to={subItem.path || '#'}
+                              className={`
+                                flex items-center gap-2 px-3 py-1.5 ml-6 text-sm rounded-md transition-colors
+                                ${
+                                  isActive(subItem.path || '')
+                                    ? 'bg-blue-50 text-blue-700 font-medium'
+                                    : 'text-gray-600 hover:bg-gray-100'
+                                }
+                              `}
+                            >
+                              {/* ツリーの枝 (font-monoで記号の幅を揃え、薄い色にする) */}
+                              <span className="text-gray-400 font-mono -mr-1">
+                                {isLast ? '└' : '├'}
+                              </span>
+                              
+                              <span className={isActive(subItem.path || '') ? 'text-blue-600' : 'text-gray-400'}>
+                                {subItem.icon}
+                              </span>
+                              <span>{subItem.label}</span>
+                            </Link>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 ))}
               </div>
             )}
@@ -137,7 +185,7 @@ function Header() {
 
   // TODO: 実際のユーザー情報をAuthContextから取得
   const user = {
-    name: '田中税理士',
+    name: '株式会社Beso',
     email: 'tanaka@example.com',
     role: '管理者',
   };
