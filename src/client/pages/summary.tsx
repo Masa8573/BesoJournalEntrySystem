@@ -1,4 +1,4 @@
-import { CheckCircle, AlertCircle, TrendingUp } from 'lucide-react';
+import { CheckCircle, AlertCircle } from 'lucide-react';
 import { useWorkflow } from '@/client/context/WorkflowContext';
 import ProgressBar from '@/client/components/workflow/ProgressBar';
 import WorkflowNavigation from '@/client/components/workflow/WorkflowNavigation';
