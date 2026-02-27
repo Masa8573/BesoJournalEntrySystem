@@ -2,7 +2,7 @@ import express, { Request, Response } from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import { processOCR, generateJournalEntry, exportToFreee } from './services';
+import { processOCR, generateJournalEntry, exportToFreee } from './services.js';
 
 const router = express.Router();
 

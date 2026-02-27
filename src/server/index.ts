@@ -3,7 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import apiRouter from './api';
+import apiRouter from './api.js';
 
 // 環境変数を読み込み
 dotenv.config();
