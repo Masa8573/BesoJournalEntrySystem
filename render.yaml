@@ -2,9 +2,9 @@ services:
   - type: web
     name: tax-copilot
     env: node
-    region: singapore  # 東京リージョンがないのでシンガポール（最も近い）
+    region: singapore
     plan: free
-    buildCommand: npm install && npm run build:all
+    buildCommand: npm ci && npm rebuild rollup && npm run build:all
     startCommand: npm run start
     healthCheckPath: /health
     envVars:
@@ -13,13 +13,13 @@ services:
       - key: PORT
         value: 10000
       - key: SUPABASE_URL
-        sync: false  # Renderダッシュボードで手動設定
+        sync: false
       - key: SUPABASE_ANON_KEY
-        sync: false  # Renderダッシュボードで手動設定
+        sync: false
       - key: GEMINI_API_KEY
-        sync: false  # Renderダッシュボードで手動設定
+        sync: false
       - key: VITE_SUPABASE_URL
         sync: false
       - key: VITE_SUPABASE_ANON_KEY
         sync: false
-    autoDeploy: true  # mainブランチへのpush時に自動デプロイ
+    autoDeploy: true
