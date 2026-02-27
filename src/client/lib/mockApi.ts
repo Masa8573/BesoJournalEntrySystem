@@ -12,6 +12,18 @@ import type {
   ApiResponse,
 } from '@/types';
 
+import {
+  clientsApi as _clientsApi,
+  industriesApi as _industriesApi,
+  accountItemsApi as _accountItemsApi,
+  taxCategoriesApi as _taxCategoriesApi,
+  tagsApi as _tagsApi,
+  rulesApi as _rulesApi,
+  documentsApi as _documentsApi,
+  journalEntriesApi as _journalEntriesApi,
+  usersApi as _usersApi,
+} from './api';
+
 // 環境変数でモードを切り替え（デフォルトはモック）
 const USE_MOCK = import.meta.env.VITE_USE_MOCK !== 'false';
 
@@ -280,23 +292,21 @@ const mockApi = {
 // エクスポート（条件分岐）
 // ============================================
 
-// モックモードの場合はモックAPIを、本番モードの場合は実際のAPIをエクスポート
-const getProdApi = async () => {
-  const m = await import('./api');
-  return {
-    clients: m.clientsApi,
-    industries: m.industriesApi,
-    accountItems: m.accountItemsApi,
-    taxCategories: m.taxCategoriesApi,
-    tags: m.tagsApi,
-    rules: m.rulesApi,
-    documents: m.documentsApi,
-    journalEntries: m.journalEntriesApi,
-    users: m.usersApi,
-  };
+
+
+const prodApi = {
+  clients: _clientsApi,
+  industries: _industriesApi,
+  accountItems: _accountItemsApi,
+  taxCategories: _taxCategoriesApi,
+  tags: _tagsApi,
+  rules: _rulesApi,
+  documents: _documentsApi,
+  journalEntries: _journalEntriesApi,
+  users: _usersApi,
 };
 
-export const api = USE_MOCK ? mockApi : await getProdApi();
+export const api = USE_MOCK ? mockApi : prodApi;
 
 // 個別エクスポート
 export const clientsApi = api.clients;
