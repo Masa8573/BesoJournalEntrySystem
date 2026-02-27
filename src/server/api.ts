@@ -186,7 +186,7 @@ router.post('/freee/export', async (req: Request, res: Response) => {
     // freee形式に変換
     const transactions = journal_entries.map((entry: any) => ({
       issue_date: entry.entry_date,
-      type: entry.category === '事業用' ? 'expense' : 'expense',
+      type: (entry.category === '事業用' ? 'expense' : 'expense') as 'income' | 'expense',
       amount: entry.amount,
       description: entry.notes,
       account_item_id: parseInt(entry.account_item_code),
