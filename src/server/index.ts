@@ -11,10 +11,6 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// ES Modules用の__dirnameの代替
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
 // ミドルウェア設定
 app.use(cors({
   origin: process.env.VITE_APP_URL || 'http://localhost:5173',
@@ -34,7 +30,7 @@ app.use('/api', apiRouter);
 
 // 静的ファイル配信（本番環境）
 if (process.env.NODE_ENV === 'production') {
-  const distPath = path.join(__dirname, '../../dist');
+  const distPath = path.join(process.cwd(), 'dist');
   app.use(express.static(distPath));
   
   // React Routerのため、全てのルートでindex.htmlを返す

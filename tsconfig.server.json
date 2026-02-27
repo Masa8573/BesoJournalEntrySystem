@@ -2,10 +2,10 @@
   "compilerOptions": {
     "target": "ES2023",
     "lib": ["ES2023"],
-    "module": "ESNext",
-    "moduleResolution": "node",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "outDir": "./dist/server",
-    "rootDir": "./src",
+    "rootDir": "./src/server",
     "skipLibCheck": true,
     "strict": false,
     "noUnusedLocals": false,
@@ -14,5 +14,5 @@
     "resolveJsonModule": true,
     "types": ["node"]
   },
-  "include": ["src/server/**/*", "src/types/**/*"]
+  "include": ["src/server/**/*"]
 }
