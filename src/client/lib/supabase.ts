@@ -45,6 +45,29 @@ export const auth = {
     const { data: { session }, error } = await supabase.auth.getSession();
     return { session, error };
   },
+  // auth オブジェクトに追加
+
+  // Google OAuth ログイン
+  signInWithGoogle: async () => {
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/`, // ログイン後のリダイレクト先
+      },
+    });
+    return { data, error };
+  },
+
+  // サインアップ（通常登録）
+  signUp: async (email: string, password: string) => {
+    const { data, error } = await supabase.auth.signUp({ email, password });
+    return { data, error };
+  },
+
+  // 認証状態変化の監視
+  onAuthStateChange: (callback: (event: string, session: any) => void) => {
+    return supabase.auth.onAuthStateChange(callback);
+  },
 };
 
 // ストレージヘルパー関数
@@ -74,3 +97,4 @@ export const storage = {
     return { data, error };
   },
 };
+
