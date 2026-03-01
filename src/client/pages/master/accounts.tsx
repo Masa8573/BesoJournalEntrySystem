@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { Plus, Pencil, Trash2, Search, FileText, TrendingUp, TrendingDown, Building, CreditCard, BookOpen } from 'lucide-react';
-import { accountItemsApi } from '@/client/lib/mockApi';
+//import { accountItemsApi } from '@/client/lib/mockApi';
 import type { AccountItem } from '@/types';
 import Modal from '@/client/components/ui/Modal';
+import { supabase } from '@/client/lib/supabase';
 
 export default function AccountsPage() {
   const [accountItems, setAccountItems] = useState<AccountItem[]>([]);
@@ -29,10 +30,21 @@ export default function AccountsPage() {
 
   const loadAccountItems = async () => {
     setLoading(true);
-    const response = await accountItemsApi.getAll();
-    if (response.data) {
-      setAccountItems(response.data);
+    
+    // supabaseから直接 'account_items' テーブルのデータを取得
+    // orderでコード順に並び替えています
+    const { data, error } = await supabase
+      .from('account_items')
+      .select('*')
+      .order('code', { ascending: true });
+
+    if (error) {
+      console.error('取得エラー:', error.message);
+      alert('データの取得に失敗しました');
+    } else if (data) {
+      setAccountItems(data as AccountItem[]);
     }
+    
     setLoading(false);
   };
 
@@ -55,21 +67,34 @@ export default function AccountsPage() {
     });
     setShowModal(true);
   };
-
-  // 送信処理
+  
+  // 3. 送信処理（CREATE / UPDATE）
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // ★注意: フォームのデータとDBのスキーマを合わせるための整形
     const itemData = {
-      ...formData,
+      code: formData.code,
+      name: formData.name,
+      fs_category: formData.category, // '資産' '負債' などの文字列
+      short_name: formData.short_name,
+      is_active: true,
       is_default: false,
-      industry_id: null,
+      is_system: false,
+      // category_id: 本来はここを選択されたカテゴリーのUUIDにする必要があります（後述）
     };
 
     if (editingItem) {
-      // 編集
-      const response = await accountItemsApi.update(editingItem.id, itemData);
-      if (response.data) {
+      // 【編集】Supabaseのupdateメソッドを使用
+      const { error } = await supabase
+        .from('account_items')
+        .update(itemData)
+        .eq('id', editingItem.id); // 更新するIDを指定
+
+      if (error) {
+        console.error('更新エラー:', error.message);
+        alert('更新に失敗しました');
+      } else {
         alert('勘定科目を更新しました');
         setShowModal(false);
         setEditingItem(null);
@@ -77,9 +102,15 @@ export default function AccountsPage() {
         loadAccountItems();
       }
     } else {
-      // 新規登録
-      const response = await accountItemsApi.create(itemData);
-      if (response.data) {
+      // 【新規登録】Supabaseのinsertメソッドを使用
+      const { error } = await supabase
+        .from('account_items')
+        .insert([itemData]); // 配列で渡す
+
+      if (error) {
+        console.error('登録エラー:', error.message);
+        alert('登録に失敗しました');
+      } else {
         alert('勘定科目を登録しました');
         setShowModal(false);
         resetForm();
@@ -88,18 +119,24 @@ export default function AccountsPage() {
     }
   };
 
-  // 削除処理
+  // 4. 削除処理 (DELETE)
   const handleDelete = async (item: AccountItem) => {
     if (!window.confirm(`勘定科目「${item.name}」を削除しますか？\n\nこの操作は取り消せません。`)) {
       return;
     }
 
-    const response = await accountItemsApi.delete(item.id);
-    if (response.error === null) {
+    // Supabaseのdeleteメソッドを使用
+    const { error } = await supabase
+      .from('account_items')
+      .delete()
+      .eq('id', item.id); // 削除するIDを指定
+
+    if (error) {
+      console.error('削除エラー:', error.message);
+      alert('削除に失敗しました');
+    } else {
       alert('勘定科目を削除しました');
       loadAccountItems();
-    } else {
-      alert('削除に失敗しました');
     }
   };
 
