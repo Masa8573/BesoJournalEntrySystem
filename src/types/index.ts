@@ -28,10 +28,20 @@ export interface Industry {
   code: string;
   name: string;
   description: string | null;
-  client_count: number;
-  status: 'active' | 'inactive';
+  parent_id: string | null;
+  sort_order: number;
+  is_active: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface AccountCategory {
+  id: string;
+  code: string;      // '1'=資産, '2'=負債, '3'=純資産, '4'=収益, '5'=費用
+  name: string;      // '資産', '負債', '純資産', '収益', '費用'
+  type: 'bs' | 'pl';
+  sort_order: number;
+  created_at: string;
 }
 
 export interface Client {
@@ -48,26 +58,66 @@ export interface Client {
   updated_at: string;
 }
 
+// DBの account_items テーブルに完全対応した型
 export interface AccountItem {
   id: string;
+  organization_id: string | null;
+  client_id: string | null;
+  industry_id: string | null;
+
+  // 科目カテゴリ（外部キー）
+  category_id: string;
+
   code: string;
   name: string;
-  category: string;
-  tax_category: string | null;
-  is_default: boolean;
-  industry_id: string | null;
+  name_kana: string | null;
   short_name: string | null;
+
+  // 分類
+  sub_category: string | null;   // '流動資産', '固定資産（有形）' など
+
+  // 税務
+  tax_category_id: string | null;
+  subject_to_depreciation: boolean;
+
+  // 決算書表示
+  fs_category: string | null;
+  display_order: number;
+
+  // 相手勘定科目
+  default_contra_account_id: string | null;
+
+  // 設定
+  is_default: boolean;
+  is_system: boolean;
+  is_active: boolean;
+  allow_department: boolean;
+  allow_tag: boolean;
+
+  // freee連携
+  freee_account_item_id: string | null;
+
+  description: string | null;
   created_at: string;
   updated_at: string;
+
+  // JOIN結果（select時に取得するリレーション）
+  account_category?: AccountCategory;
+  tax_category?: TaxCategory;
+  industry?: Industry;
 }
 
 export interface TaxCategory {
   id: string;
+  code: string;
   name: string;
-  description: string | null;
+  display_name: string | null;
+  type: string;       // '課税' | '非課税' | '不課税' | '免税'
+  direction: string;  // '売上' | '仕入' | 'その他'
   is_default: boolean;
-  applicable_to_income: boolean;
-  applicable_to_expense: boolean;
+  is_active: boolean;
+  sort_order: number;
+  description: string | null;
   created_at: string;
   updated_at: string;
 }

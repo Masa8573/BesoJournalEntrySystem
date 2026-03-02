@@ -1,152 +1,275 @@
 import { useState, useEffect } from 'react';
-import { Search, Plus, Edit, Trash2, Play, RotateCcw } from 'lucide-react';
-import { clientsApi, industriesApi } from '@/client/lib/mockApi';
-import { useWorkflow } from '@/client/context/WorkflowContext';
-import type { Client, Industry } from '@/types';
+import {
+  Plus, Pencil, Trash2, Search, FileText,
+  TrendingUp, TrendingDown, Building, CreditCard, BookOpen,
+  ChevronDown, ChevronUp
+} from 'lucide-react';
+import type { AccountItem, AccountCategory, TaxCategory } from '@/types';
 import Modal from '@/client/components/ui/Modal';
+import { supabase } from '@/client/lib/supabase';
 
-interface ClientWithIndustry extends Client {
-  industry?: Industry;
-}
+// 不動産賃貸業のindustry id（DB登録済み）
+const REAL_ESTATE_INDUSTRY_ID = '55555555-0001-0001-0001-000000000030';
 
-export default function ClientsPage() {
-  const { startWorkflow, resumeWorkflow, getAllWorkflows } = useWorkflow();
-  const [clients, setClients] = useState<ClientWithIndustry[]>([]);
-  const [industries, setIndustries] = useState<Industry[]>([]);
+// account_categories のコード → 表示名・区分
+const CATEGORY_CODE_MAP: Record<string, { label: string; filter: string }> = {
+  '1': { label: '資産', filter: 'asset' },
+  '2': { label: '負債', filter: 'liability' },
+  '3': { label: '純資産', filter: 'equity' },
+  '4': { label: '収入', filter: 'income' },
+  '5': { label: '支出', filter: 'expense' },
+};
+
+// 新規登録フォームで使う category_id を名前から引けるようにするヘルパー
+type CategoryFilterType = 'all' | 'income' | 'expense' | 'asset' | 'liability';
+
+export default function AccountsPage() {
+  const [accountItems, setAccountItems] = useState<AccountItem[]>([]);
+  const [accountCategories, setAccountCategories] = useState<AccountCategory[]>([]);
+  const [taxCategories, setTaxCategories] = useState<TaxCategory[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [activeTab, setActiveTab] = useState<'general' | 'real_estate'>('general');
+  const [activeCategory, setActiveCategory] = useState<CategoryFilterType>('all');
+  const [showActiveOnly, setShowActiveOnly] = useState(true);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
-  const [editingClient, setEditingClient] = useState<ClientWithIndustry | null>(null);
-  
-  // フォーム状態
+  const [editingItem, setEditingItem] = useState<AccountItem | null>(null);
+  const [expandedDescription, setExpandedDescription] = useState<string | null>(null);
+
+  // フォーム状態（DBカラムに合わせた構造）
   const [formData, setFormData] = useState({
+    code: '',
     name: '',
-    industry_id: '',
-    annual_sales: '',
-    tax_category: '原則課税' as '原則課税' | '簡易課税' | '免税',
-    invoice_registered: false,
-    use_custom_rules: false,
+    category_id: '',    // account_categories の UUID
+    tax_category_id: '', // tax_categories の UUID（空文字 = 対象外）
+    short_name: '',
+    description: '',
+    sub_category: '',
   });
 
   useEffect(() => {
-    loadClients();
-    loadIndustries();
+    loadMasterData();
   }, []);
 
-  const loadClients = async () => {
-    setLoading(true);
-    const response = await clientsApi.getAll();
-    if (response.data) {
-      setClients(response.data as any);
+  useEffect(() => {
+    if (accountCategories.length > 0) {
+      loadAccountItems();
     }
+  }, [activeTab, showActiveOnly, accountCategories]);
+
+  // マスタデータ（カテゴリ・税区分）を先に取得
+  const loadMasterData = async () => {
+    const [catRes, taxRes] = await Promise.all([
+      supabase.from('account_categories').select('*').order('sort_order'),
+      supabase.from('tax_categories').select('*').order('sort_order'),
+    ]);
+    if (catRes.data) setAccountCategories(catRes.data as AccountCategory[]);
+    if (taxRes.data) setTaxCategories(taxRes.data as TaxCategory[]);
+  };
+
+  const loadAccountItems = async () => {
+    setLoading(true);
+
+    let query = supabase
+      .from('account_items')
+      .select(`
+        *,
+        account_category:account_categories(*),
+        tax_category:tax_categories(*),
+        industry:industries(*)
+      `)
+      .order('code', { ascending: true });
+
+    // タブに応じて業種フィルタ
+    if (activeTab === 'general') {
+      query = query.is('industry_id', null);
+    } else {
+      query = query.eq('industry_id', REAL_ESTATE_INDUSTRY_ID);
+    }
+
+    // 有効のみ表示
+    if (showActiveOnly) {
+      query = query.eq('is_active', true);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error('取得エラー:', error.message);
+      alert('データの取得に失敗しました: ' + error.message);
+    } else if (data) {
+      setAccountItems(data as AccountItem[]);
+    }
+
     setLoading(false);
   };
 
-  const loadIndustries = async () => {
-    const response = await industriesApi.getAll();
-    if (response.data) {
-      setIndustries(response.data);
-    }
+  // カテゴリIDから表示名を取得
+  const getCategoryName = (item: AccountItem): string => {
+    const cat = item.account_category;
+    if (!cat) return '-';
+    return CATEGORY_CODE_MAP[cat.code]?.label ?? cat.name;
+  };
+
+  // カテゴリIDから絞り込みキーを取得
+  const getCategoryFilter = (item: AccountItem): string => {
+    const cat = item.account_category;
+    if (!cat) return '';
+    return CATEGORY_CODE_MAP[cat.code]?.filter ?? '';
+  };
+
+  // 税区分の表示名
+  const getTaxCategoryName = (item: AccountItem): string => {
+    if (!item.tax_category) return '対象外';
+    return item.tax_category.display_name ?? item.tax_category.name;
   };
 
   // 新規登録モーダルを開く
   const handleOpenNewModal = () => {
-    setEditingClient(null);
-    setFormData({
-      name: '',
-      industry_id: '',
-      annual_sales: '',
-      tax_category: '原則課税',
-      invoice_registered: false,
-      use_custom_rules: false,
-    });
+    setEditingItem(null);
+    resetForm();
     setShowModal(true);
   };
 
   // 編集モーダルを開く
-  const handleOpenEditModal = (client: ClientWithIndustry) => {
-    setEditingClient(client);
+  const handleOpenEditModal = (item: AccountItem) => {
+    setEditingItem(item);
     setFormData({
-      name: client.name,
-      industry_id: client.industry_id || '',
-      annual_sales: client.annual_sales?.toString() || '',
-      tax_category: client.tax_category,
-      invoice_registered: client.invoice_registered,
-      use_custom_rules: client.use_custom_rules,
+      code: item.code,
+      name: item.name,
+      category_id: item.category_id,
+      tax_category_id: item.tax_category_id ?? '',
+      short_name: item.short_name ?? '',
+      description: item.description ?? '',
+      sub_category: item.sub_category ?? '',
     });
     setShowModal(true);
   };
 
-  // 送信処理
+  // 送信処理（CREATE / UPDATE）
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    const clientData = {
-      ...formData,
-      organization_id: 'org-1',
-      annual_sales: formData.annual_sales ? Number(formData.annual_sales) : null,
-      status: 'active' as const,
-    };
 
-    if (editingClient) {
-      // 編集
-      const response = await clientsApi.update(editingClient.id, clientData);
-      if (response.data) {
-        alert('顧客情報を更新しました');
-        setShowModal(false);
-        setEditingClient(null);
-        loadClients();
-      }
-    } else {
-      // 新規登録
-      const response = await clientsApi.create(clientData);
-      if (response.data) {
-        alert('顧客を登録しました');
-        setShowModal(false);
-        loadClients();
-      }
-    }
-  };
-
-  // 削除処理
-  const handleDelete = async (client: ClientWithIndustry) => {
-    if (!window.confirm(`「${client.name}」を削除しますか？\n\nこの操作は取り消せません。`)) {
+    if (!formData.category_id) {
+      alert('区分を選択してください');
       return;
     }
 
-    const response = await clientsApi.delete(client.id);
-    if (response.error === null) {
-      alert('顧客を削除しました');
-      loadClients();
+    const itemData = {
+      code: formData.code,
+      name: formData.name,
+      category_id: formData.category_id,
+      tax_category_id: formData.tax_category_id || null,
+      short_name: formData.short_name || null,
+      description: formData.description || null,
+      sub_category: formData.sub_category || null,
+      industry_id: activeTab === 'real_estate' ? REAL_ESTATE_INDUSTRY_ID : null,
+      is_default: false,
+      is_system: false,
+      is_active: true,
+    };
+
+    if (editingItem) {
+      const { error } = await supabase
+        .from('account_items')
+        .update(itemData)
+        .eq('id', editingItem.id);
+
+      if (error) {
+        console.error('更新エラー:', error.message);
+        alert('更新に失敗しました: ' + error.message);
+        return;
+      }
+      alert('勘定科目を更新しました');
     } else {
-      alert('削除に失敗しました');
+      const { error } = await supabase
+        .from('account_items')
+        .insert([itemData]);
+
+      if (error) {
+        console.error('登録エラー:', error.message);
+        alert('登録に失敗しました: ' + error.message);
+        return;
+      }
+      alert('勘定科目を登録しました');
+    }
+
+    setShowModal(false);
+    setEditingItem(null);
+    resetForm();
+    loadAccountItems();
+  };
+
+  // 削除処理
+  const handleDelete = async (item: AccountItem) => {
+    if (item.is_system) {
+      alert('システム科目は削除できません');
+      return;
+    }
+    if (!window.confirm(`勘定科目「${item.name}」を削除しますか？\n\nこの操作は取り消せません。`)) {
+      return;
+    }
+
+    const { error } = await supabase
+      .from('account_items')
+      .delete()
+      .eq('id', item.id);
+
+    if (error) {
+      console.error('削除エラー:', error.message);
+      alert('削除に失敗しました: ' + error.message);
+    } else {
+      alert('勘定科目を削除しました');
+      loadAccountItems();
     }
   };
 
-  // ワークフロー開始
-  const handleStartWorkflow = (client: ClientWithIndustry) => {
-    startWorkflow(client.id, client.name);
+  // 有効/無効トグル
+  const handleToggleActive = async (item: AccountItem) => {
+    if (item.is_system && item.is_active) {
+      alert('システム科目は無効にできません');
+      return;
+    }
+    const { error } = await supabase
+      .from('account_items')
+      .update({ is_active: !item.is_active })
+      .eq('id', item.id);
+
+    if (!error) loadAccountItems();
   };
 
-  const filteredClients = clients.filter((client) =>
-    client.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    client.industry?.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  // 進行中のワークフロー取得
-  const activeWorkflows = getAllWorkflows();
-
-  // 顧客ごとのワークフロー状態を取得
-  const getWorkflowForClient = (clientId: string) => {
-    return activeWorkflows.find(w => w.clientId === clientId);
+  const resetForm = () => {
+    setFormData({
+      code: '',
+      name: '',
+      category_id: '',
+      tax_category_id: '',
+      short_name: '',
+      description: '',
+      sub_category: '',
+    });
   };
 
-  const formatCurrency = (amount: number | null) => {
-    if (!amount) return '¥0';
-    return `¥${amount.toLocaleString()}`;
+  // フィルタリング
+  const filteredItems = accountItems.filter((item) => {
+    const matchesSearch =
+      item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      item.code.includes(searchQuery) ||
+      (item.short_name && item.short_name.toLowerCase().includes(searchQuery.toLowerCase()));
+
+    if (!matchesSearch) return false;
+
+    if (activeCategory === 'all') return true;
+    return getCategoryFilter(item) === activeCategory;
+  });
+
+  // カテゴリ別カウント（絞り込みキーで集計）
+  const getCategoryCount = (filter: string) => {
+    if (filter === 'all') return accountItems.length;
+    return accountItems.filter((item) => getCategoryFilter(item) === filter).length;
   };
 
-  if (loading) {
+  if (loading && accountItems.length === 0) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center">
@@ -162,228 +285,278 @@ export default function ClientsPage() {
       {/* ページヘッダー */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">顧客管理</h1>
+          <h1 className="text-2xl font-bold text-gray-900">勘定科目管理</h1>
           <p className="text-sm text-gray-500 mt-1">
-            仕訳入力処理を行う顧客を選択または新規登録してください
+            仕訳で使用する勘定科目を管理します
           </p>
         </div>
-        <button
-          onClick={handleOpenNewModal}
-          className="flex items-center gap-2 btn-primary"
-        >
+        <button onClick={handleOpenNewModal} className="flex items-center gap-2 btn-primary">
           <Plus size={18} />
-          <span>新規顧客登録</span>
+          新規勘定科目
         </button>
       </div>
 
-      {/* 進行中のワークフロー */}
-      {activeWorkflows.length > 0 && (
-        <div className="card bg-blue-50 border-blue-200">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-blue-900">
-              📌 進行中のワークフロー ({activeWorkflows.length}件)
-            </h2>
+      {/* タブ：一般用 / 不動産賃貸業用 */}
+      <div className="flex gap-3">
+        {(['general', 'real_estate'] as const).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => { setActiveTab(tab); setActiveCategory('all'); }}
+            className={`px-6 py-2.5 text-sm font-medium rounded-lg transition-colors ${
+              activeTab === tab
+                ? 'bg-white text-gray-900 shadow-sm border border-gray-200'
+                : 'bg-transparent text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            {tab === 'general' ? '一般用' : '不動産賃貸業用'}
+          </button>
+        ))}
+      </div>
+
+      {/* サマリーカード */}
+      <div className="grid grid-cols-6 gap-4">
+        <div className="bg-white rounded-lg border border-gray-200 p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <FileText size={20} className="text-gray-600" />
+            <span className="text-sm font-medium text-gray-600">全科目</span>
           </div>
+          <div className="text-3xl font-bold text-gray-900">{accountItems.length}</div>
+        </div>
+        <div className="bg-white rounded-lg border border-gray-200 p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+            <span className="text-sm font-medium text-gray-600">有効</span>
+          </div>
+          <div className="text-3xl font-bold text-gray-900">
+            {accountItems.filter(i => i.is_active).length}
+          </div>
+        </div>
+        <div className="bg-white rounded-lg border border-gray-200 p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <TrendingUp size={20} className="text-blue-600" />
+            <span className="text-sm font-medium text-gray-600">収入</span>
+          </div>
+          <div className="text-3xl font-bold text-gray-900">{getCategoryCount('income')}</div>
+        </div>
+        <div className="bg-white rounded-lg border border-gray-200 p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <TrendingDown size={20} className="text-red-600" />
+            <span className="text-sm font-medium text-gray-600">支出</span>
+          </div>
+          <div className="text-3xl font-bold text-gray-900">{getCategoryCount('expense')}</div>
+        </div>
+        <div className="bg-white rounded-lg border border-gray-200 p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <Building size={20} className="text-green-600" />
+            <span className="text-sm font-medium text-gray-600">資産</span>
+          </div>
+          <div className="text-3xl font-bold text-gray-900">{getCategoryCount('asset')}</div>
+        </div>
+        <div className="bg-white rounded-lg border border-gray-200 p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <CreditCard size={20} className="text-orange-600" />
+            <span className="text-sm font-medium text-gray-600">負債</span>
+          </div>
+          <div className="text-3xl font-bold text-gray-900">{getCategoryCount('liability')}</div>
+        </div>
+      </div>
 
-          <div className="space-y-3">
-            {activeWorkflows.map((workflow) => (
-              <div
-                key={workflow.id}
-                className="flex items-center justify-between p-4 bg-white rounded-lg border border-blue-200"
+      {/* 勘定科目一覧 */}
+      <div className="bg-white rounded-lg border border-gray-200">
+        {/* 検索バー + 有効のみトグル */}
+        <div className="p-4 border-b border-gray-200">
+          <div className="flex items-center gap-4">
+            <div className="flex-1 relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
+              <input
+                type="text"
+                placeholder="科目名、コード、ショートカットで検索..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-gray-700">有効のみ表示</span>
+              <button
+                onClick={() => setShowActiveOnly(!showActiveOnly)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                  showActiveOnly ? 'bg-blue-600' : 'bg-gray-200'
+                }`}
               >
-                <div className="flex-1">
-                  <h3 className="font-semibold text-gray-900 mb-1">{workflow.clientName}</h3>
-                  <div className="flex items-center gap-4 text-sm">
-                    <span className="text-gray-600">
-                      進捗: {workflow.completedSteps.length}/8 ステップ完了
-                    </span>
-                    <span className="text-gray-500">
-                      最終更新: {new Date(workflow.lastUpdated).toLocaleString('ja-JP')}
-                    </span>
-                  </div>
-                  {/* プログレスバー */}
-                  <div className="mt-2 w-full bg-gray-200 rounded-full h-2">
-                    <div
-                      className="bg-blue-600 h-2 rounded-full transition-all"
-                      style={{ width: `${(workflow.completedSteps.length / 8) * 100}%` }}
-                    ></div>
-                  </div>
-                </div>
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    showActiveOnly ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+        </div>
 
-                <div className="flex items-center gap-2 ml-4">
-                  <button
-                    onClick={() => resumeWorkflow(workflow.id)}
-                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-                  >
-                    <RotateCcw size={16} />
-                    続きから
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (window.confirm('このワークフローを削除しますか？')) {
-                        // TODO: ワークフロー削除機能
-                      }
-                    }}
-                    className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                  >
-                    <Trash2 size={18} />
-                  </button>
-                </div>
-              </div>
+        {/* カテゴリフィルタータブ */}
+        <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
+          <div className="flex items-center gap-2 flex-wrap">
+            {(
+              [
+                { key: 'all', label: 'すべて' },
+                { key: 'income', label: '収入' },
+                { key: 'expense', label: '支出' },
+                { key: 'asset', label: '資産' },
+                { key: 'liability', label: '負債' },
+              ] as { key: CategoryFilterType; label: string }[]
+            ).map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setActiveCategory(key)}
+                className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
+                  activeCategory === key
+                    ? 'bg-blue-100 text-blue-700'
+                    : 'bg-white text-gray-600 hover:bg-gray-50 border border-gray-200'
+                }`}
+              >
+                {label} ({key === 'all' ? accountItems.length : getCategoryCount(key)})
+              </button>
             ))}
           </div>
         </div>
-      )}
 
-      {/* 顧客一覧カード */}
-      <div className="card">
-        <div className="border-b border-gray-200 pb-4 mb-4">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">顧客一覧</h2>
-          <p className="text-sm text-gray-500 mb-4">
-            仕訳処理を行う顧客を選択してください
-          </p>
-
-          {/* 検索バー */}
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
-            <input
-              type="text"
-              placeholder="顧客名または業種で検索..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="input pl-10"
-            />
-          </div>
-        </div>
-
-        {/* 顧客リスト */}
+        {/* テーブル */}
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  顧客名
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  業種
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  年商
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  課税区分
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  インボイス
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  ステータス
-                </th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  操作
-                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">コード</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">科目名</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">区分</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">税区分</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">収入相手方</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">支出相手方</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">ショートカット</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">知識ベース</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">状態</th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">操作</th>
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {filteredClients.length === 0 ? (
+            <tbody className="divide-y divide-gray-200">
+              {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-8 text-center text-gray-500">
-                    顧客が見つかりませんでした
+                  <td colSpan={10} className="px-6 py-8 text-center text-gray-500">
+                    読み込み中...
+                  </td>
+                </tr>
+              ) : filteredItems.length === 0 ? (
+                <tr>
+                  <td colSpan={10} className="px-6 py-8 text-center text-gray-500">
+                    勘定科目が見つかりませんでした
                   </td>
                 </tr>
               ) : (
-                filteredClients.map((client) => {
-                  const workflow = getWorkflowForClient(client.id);
-                  const hasActiveWorkflow = !!workflow;
-
-                  return (
-                    <tr
-                      key={client.id}
-                      className="hover:bg-gray-50 transition-colors"
-                    >
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm font-medium text-gray-900">{client.name}</div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">{client.industry?.name || '-'}</div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">{formatCurrency(client.annual_sales)}</div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span
-                          className={`badge ${
-                            client.tax_category === '原則課税'
-                              ? 'badge-blue'
-                              : client.tax_category === '簡易課税'
-                              ? 'badge-green'
-                              : 'badge-gray'
-                          }`}
-                        >
-                          {client.tax_category}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span
-                          className={`badge ${
-                            client.invoice_registered ? 'badge-green' : 'badge-gray'
-                          }`}
-                        >
-                          {client.invoice_registered ? '取得済' : '未取得'}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {hasActiveWorkflow ? (
-                          <span className="badge badge-orange">
-                            進行中 ({workflow.currentStep}/8)
-                          </span>
-                        ) : (
-                          <span className="badge badge-gray">
-                            待機中
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                        <div className="flex items-center justify-end gap-2">
-                          {hasActiveWorkflow ? (
-                            <button
-                              onClick={() => resumeWorkflow(workflow.id)}
-                              className="flex items-center gap-1 px-3 py-1.5 bg-orange-500 text-white text-xs font-medium rounded hover:bg-orange-600 transition-colors"
-                            >
-                              <RotateCcw size={14} />
-                              続きから
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => handleStartWorkflow(client)}
-                              className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700 transition-colors"
-                            >
-                              <Play size={14} />
-                              開始
-                            </button>
-                          )}
-                          <button 
-                            onClick={() => handleOpenEditModal(client)}
-                            className="p-1 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                            title="編集"
+                filteredItems.map((item) => (
+                  <tr key={item.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 text-sm text-gray-900 font-medium font-mono">
+                      {item.code}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-gray-900 font-medium">
+                      {item.name}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                        getCategoryFilter(item) === 'income'
+                          ? 'bg-blue-100 text-blue-700'
+                          : getCategoryFilter(item) === 'expense'
+                          ? 'bg-red-100 text-red-700'
+                          : getCategoryFilter(item) === 'asset'
+                          ? 'bg-green-100 text-green-700'
+                          : getCategoryFilter(item) === 'liability'
+                          ? 'bg-orange-100 text-orange-700'
+                          : 'bg-gray-100 text-gray-700'
+                      }`}>
+                        {getCategoryName(item)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-sm text-gray-600">
+                      {getTaxCategoryName(item)}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-gray-500">事業主借</td>
+                    <td className="px-4 py-3 text-sm text-gray-500">事業主貸</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1 text-sm text-gray-500 font-mono">
+                        <FileText size={14} className="text-gray-400 shrink-0" />
+                        <span>{item.short_name || '-'}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 max-w-xs">
+                      {item.description ? (
+                        <div>
+                          <button
+                            onClick={() => setExpandedDescription(
+                              expandedDescription === item.id ? null : item.id
+                            )}
+                            className="flex items-center gap-1 text-xs text-gray-500 hover:text-blue-600 text-left"
                           >
-                            <Edit size={18} />
-                          </button>
-                          <button 
-                            onClick={() => handleDelete(client)}
-                            className="p-1 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                            title="削除"
-                          >
-                            <Trash2 size={18} />
+                            <BookOpen size={13} className="shrink-0" />
+                            <span className={expandedDescription === item.id ? '' : 'line-clamp-1'}>
+                              {item.description}
+                            </span>
+                            {expandedDescription === item.id
+                              ? <ChevronUp size={13} className="shrink-0" />
+                              : <ChevronDown size={13} className="shrink-0" />
+                            }
                           </button>
                         </div>
-                      </td>
-                    </tr>
-                  );
-                })
+                      ) : (
+                        <span className="text-xs text-gray-400">-</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <button
+                        onClick={() => handleToggleActive(item)}
+                        title={item.is_system ? 'システム科目' : item.is_active ? '無効にする' : '有効にする'}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                          item.is_active ? 'bg-blue-600' : 'bg-gray-300'
+                        } ${item.is_system ? 'cursor-not-allowed opacity-75' : 'cursor-pointer'}`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            item.is_active ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => handleOpenEditModal(item)}
+                          className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                          title="編集"
+                        >
+                          <Pencil size={16} />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(item)}
+                          disabled={item.is_system}
+                          className={`p-1.5 rounded transition-colors ${
+                            item.is_system
+                              ? 'text-gray-300 cursor-not-allowed'
+                              : 'text-red-600 hover:bg-red-50'
+                          }`}
+                          title={item.is_system ? 'システム科目は削除不可' : '削除'}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* フッター */}
+        <div className="px-4 py-3 border-t border-gray-200 text-sm text-gray-500">
+          {filteredItems.length} 件表示 / 全 {accountItems.length} 件
         </div>
       </div>
 
@@ -392,16 +565,35 @@ export default function ClientsPage() {
         isOpen={showModal}
         onClose={() => {
           setShowModal(false);
-          setEditingClient(null);
+          setEditingItem(null);
+          resetForm();
         }}
-        title={editingClient ? '顧客情報編集' : '新規顧客登録'}
+        title={editingItem ? '勘定科目編集' : '新規勘定科目'}
         size="lg"
       >
-        <form onSubmit={handleSubmit} className="space-y-6">
-          {/* 顧客名 */}
+        <form onSubmit={handleSubmit} className="space-y-5">
+          {/* 科目コード */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              顧客名 <span className="text-red-500">*</span>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              科目コード <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              required
+              value={formData.code}
+              onChange={(e) => setFormData({ ...formData, code: e.target.value })}
+              className="input"
+              placeholder="例: 700"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              {activeTab === 'real_estate' ? '不動産賃貸業用は「RE_」で始めることを推奨（例: RE_700）' : '3桁の数字を推奨'}
+            </p>
+          </div>
+
+          {/* 科目名 */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              科目名 <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
@@ -409,90 +601,91 @@ export default function ClientsPage() {
               value={formData.name}
               onChange={(e) => setFormData({ ...formData, name: e.target.value })}
               className="input"
-              placeholder="山田太郎"
+              placeholder="例: 燃料費"
             />
           </div>
 
-          {/* 業種 */}
+          {/* 区分（account_categories から動的取得） */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              業種 <span className="text-red-500">*</span>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              区分 <span className="text-red-500">*</span>
             </label>
             <select
               required
-              value={formData.industry_id}
-              onChange={(e) => setFormData({ ...formData, industry_id: e.target.value })}
+              value={formData.category_id}
+              onChange={(e) => setFormData({ ...formData, category_id: e.target.value })}
               className="input"
             >
               <option value="">選択してください</option>
-              {industries.map((industry) => (
-                <option key={industry.id} value={industry.id}>
-                  {industry.name}
+              {accountCategories.map((cat) => (
+                <option key={cat.id} value={cat.id}>
+                  {cat.name}（{cat.type === 'bs' ? '貸借対照表' : '損益計算書'}）
                 </option>
               ))}
             </select>
           </div>
 
-          {/* 年商 */}
+          {/* 補助区分 */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              年商（円）
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              補助区分
             </label>
             <input
-              type="number"
-              value={formData.annual_sales}
-              onChange={(e) => setFormData({ ...formData, annual_sales: e.target.value })}
+              type="text"
+              value={formData.sub_category}
+              onChange={(e) => setFormData({ ...formData, sub_category: e.target.value })}
               className="input"
-              placeholder="5000000"
+              placeholder="例: 流動資産、販売費及び一般管理費"
             />
           </div>
 
-          {/* 課税区分 */}
+          {/* 税区分（tax_categories から動的取得） */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              課税区分 <span className="text-red-500">*</span>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              税区分
             </label>
-            <div className="flex gap-4">
-              {['原則課税', '簡易課税', '免税'].map((category) => (
-                <label key={category} className="flex items-center">
-                  <input
-                    type="radio"
-                    name="tax_category"
-                    value={category}
-                    checked={formData.tax_category === category}
-                    onChange={(e) => setFormData({ ...formData, tax_category: e.target.value as any })}
-                    className="mr-2"
-                  />
-                  <span className="text-sm text-gray-700">{category}</span>
-                </label>
-              ))}
-            </div>
+            <select
+              value={formData.tax_category_id}
+              onChange={(e) => setFormData({ ...formData, tax_category_id: e.target.value })}
+              className="input"
+            >
+              <option value="">対象外（税区分なし）</option>
+              {taxCategories
+                .filter(tc => tc.is_active)
+                .map((tc) => (
+                  <option key={tc.id} value={tc.id}>
+                    {tc.display_name ?? tc.name}
+                  </option>
+                ))}
+            </select>
           </div>
 
-          {/* インボイス登録 */}
+          {/* ショートカット */}
           <div>
-            <label className="flex items-center">
-              <input
-                type="checkbox"
-                checked={formData.invoice_registered}
-                onChange={(e) => setFormData({ ...formData, invoice_registered: e.target.checked })}
-                className="mr-2"
-              />
-              <span className="text-sm text-gray-700">インボイス登録済み</span>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              ショートカット
             </label>
+            <input
+              type="text"
+              value={formData.short_name}
+              onChange={(e) => setFormData({ ...formData, short_name: e.target.value })}
+              className="input"
+              placeholder="例: NENRYO"
+            />
+            <p className="text-xs text-gray-500 mt-1">freee検索用のショートカット（任意）</p>
           </div>
 
-          {/* ルール追加 */}
+          {/* 説明（知識ベース） */}
           <div>
-            <label className="flex items-center">
-              <input
-                type="checkbox"
-                checked={formData.use_custom_rules}
-                onChange={(e) => setFormData({ ...formData, use_custom_rules: e.target.checked })}
-                className="mr-2"
-              />
-              <span className="text-sm text-gray-700">顧客別ルールを使用する</span>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              知識ベース（説明）
             </label>
+            <textarea
+              value={formData.description}
+              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+              className="input min-h-[80px] resize-y"
+              placeholder="この科目の説明、使用例、注意点など"
+            />
           </div>
 
           {/* ボタン */}
@@ -501,14 +694,15 @@ export default function ClientsPage() {
               type="button"
               onClick={() => {
                 setShowModal(false);
-                setEditingClient(null);
+                setEditingItem(null);
+                resetForm();
               }}
               className="btn-secondary"
             >
               キャンセル
             </button>
             <button type="submit" className="btn-primary">
-              {editingClient ? '更新する' : '登録する'}
+              {editingItem ? '更新する' : '登録する'}
             </button>
           </div>
         </form>
