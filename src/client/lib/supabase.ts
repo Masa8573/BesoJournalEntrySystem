@@ -45,14 +45,13 @@ export const auth = {
     const { data: { session }, error } = await supabase.auth.getSession();
     return { session, error };
   },
-  // auth オブジェクトに追加
 
   // Google OAuth ログイン
   signInWithGoogle: async () => {
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: `${window.location.origin}/`, // ログイン後のリダイレクト先
+        redirectTo: `${window.location.origin}/`,
       },
     });
     return { data, error };
@@ -98,3 +97,93 @@ export const storage = {
   },
 };
 
+// ============================================
+// デバッグ診断関数
+// ブラウザのコンソールで debugAuth() を呼び出すと
+// 現在の認証状態とRLSの通り具合を確認できます
+// ============================================
+export const debugAuth = async () => {
+  console.group('🔍 Tax Copilot 認証診断');
+
+  // 1. Supabase Auth のセッション確認
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) {
+    console.error('❌ セッションなし: ログインしていません');
+    console.groupEnd();
+    return;
+  }
+  console.log('✅ セッションあり');
+  console.log('  auth.uid:', session.user.id);
+  console.log('  email:', session.user.email);
+
+  // 2. usersテーブルに自分のレコードが存在するか
+  const { data: userRow, error: userErr } = await supabase
+    .from('users')
+    .select('id, email, organization_id, role')
+    .eq('id', session.user.id)
+    .single();
+
+  if (userErr || !userRow) {
+    console.error('❌ usersテーブルに自分のレコードがありません');
+    console.error('   → Supabase Auth のUIDとusersテーブルのidが一致していない可能性があります');
+    console.error('   → debug_and_fix.sql の「修正SQL2」を実行してください');
+    console.log('  エラー:', userErr?.message);
+  } else {
+    console.log('✅ usersテーブルのレコード確認OK');
+    console.log('  organization_id:', userRow.organization_id);
+    console.log('  role:', userRow.role);
+  }
+
+  // 3. tax_categories が見えるか（USING (true) なので必ず見える）
+  const { data: taxData, error: taxErr } = await supabase
+    .from('tax_categories')
+    .select('id, name')
+    .limit(3);
+
+  if (taxErr || !taxData?.length) {
+    console.error('❌ tax_categories が取得できません');
+    console.error('   エラー:', taxErr?.message);
+    console.error('   データなし:', !taxData?.length);
+  } else {
+    console.log(`✅ tax_categories OK (${taxData.length}件+)`);
+    console.log('  サンプル:', taxData.map(t => t.name).join(', '));
+  }
+
+  // 4. account_items が見えるか（RLSが問題）
+  const { data: accountData, error: accountErr } = await supabase
+    .from('account_items')
+    .select('id, name, organization_id')
+    .limit(3);
+
+  if (accountErr || !accountData?.length) {
+    console.error('❌ account_items が取得できません');
+    console.error('   エラー:', accountErr?.message);
+    console.error('   データなし（0件）:', !accountData?.length);
+    console.error('   → RLSポリシーを修正する必要があります');
+    console.error('   → debug_and_fix.sql の「修正SQL1」を実行してください');
+  } else {
+    console.log(`✅ account_items OK (${accountData.length}件+)`);
+    console.log('  サンプル:', accountData.map(a => `${a.name}(org:${a.organization_id ?? 'null'})`).join(', '));
+  }
+
+  // 5. industries が見えるか（USING (true) なので必ず見える）
+  const { data: indData, error: indErr } = await supabase
+    .from('industries')
+    .select('id, name')
+    .limit(3);
+
+  if (indErr || !indData?.length) {
+    console.error('❌ industries が取得できません:', indErr?.message);
+  } else {
+    console.log(`✅ industries OK (${indData.length}件+)`);
+  }
+
+  console.groupEnd();
+  console.log('\n📋 診断完了。上記の ❌ 項目を修正してください。');
+  console.log('SQLの修正は Supabase Dashboard > SQL Editor で実行してください。');
+};
+
+// グローバルに公開（ブラウザコンソールから debugAuth() で呼べる）
+if (typeof window !== 'undefined') {
+  (window as any).debugAuth = debugAuth;
+}
