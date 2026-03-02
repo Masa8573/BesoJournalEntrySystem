@@ -61,7 +61,7 @@ export const clientsApi = {
 
 export const industriesApi = {
   getAll: () => handleResponse<Industry[]>(
-    supabase.from('industries').select('*').order('created_at', { ascending: false })
+    supabase.from('industries').select('*').order('sort_order', { ascending: true })
   ),
 
   getById: (id: string) => handleResponse<Industry>(
@@ -113,7 +113,7 @@ export const accountItemsApi = {
 
 export const taxCategoriesApi = {
   getAll: () => handleResponse<TaxCategory[]>(
-    supabase.from('tax_categories').select('*').order('created_at', { ascending: false })
+    supabase.from('tax_categories').select('*').order('sort_order', { ascending: true })
   ),
 
   getById: (id: string) => handleResponse<TaxCategory>(
@@ -160,28 +160,35 @@ export const tagsApi = {
 };
 
 // ============================================
-// ルールAPI
+// ルールAPI  ※DBテーブル名は processing_rules
 // ============================================
 
 export const rulesApi = {
   getAll: () => handleResponse<Rule[]>(
-    supabase.from('rules').select('*, account_item:account_items(*), tax_category:tax_categories(*), industry:industries(*), client:clients(*)').order('priority', { ascending: true })
+    supabase
+      .from('processing_rules')
+      .select('*, industry:industries(*), client:clients(*)')
+      .order('priority', { ascending: true })
   ),
 
   getById: (id: string) => handleResponse<Rule>(
-    supabase.from('rules').select('*, account_item:account_items(*), tax_category:tax_categories(*), industry:industries(*), client:clients(*)').eq('id', id).single()
+    supabase
+      .from('processing_rules')
+      .select('*, industry:industries(*), client:clients(*)')
+      .eq('id', id)
+      .single()
   ),
 
   create: (data: Partial<Rule>) => handleResponse<Rule>(
-    supabase.from('rules').insert(data).select().single()
+    supabase.from('processing_rules').insert(data).select().single()
   ),
 
   update: (id: string, data: Partial<Rule>) => handleResponse<Rule>(
-    supabase.from('rules').update(data).eq('id', id).select().single()
+    supabase.from('processing_rules').update(data).eq('id', id).select().single()
   ),
 
   delete: (id: string) => handleResponse<void>(
-    supabase.from('rules').delete().eq('id', id)
+    supabase.from('processing_rules').delete().eq('id', id)
   ),
 };
 
@@ -221,7 +228,10 @@ export const documentsApi = {
 
 export const journalEntriesApi = {
   getAll: (clientId?: string) => {
-    let query = supabase.from('journal_entries').select('*, account_item:account_items(*), tax_category:tax_categories(*), client:clients(*)').order('entry_date', { ascending: false });
+    let query = supabase
+      .from('journal_entries')
+      .select('*, account_item:account_items(*), tax_category:tax_categories(*), client:clients(*)')
+      .order('entry_date', { ascending: false });
     if (clientId) {
       query = query.eq('client_id', clientId);
     }
@@ -229,7 +239,11 @@ export const journalEntriesApi = {
   },
 
   getById: (id: string) => handleResponse<JournalEntry>(
-    supabase.from('journal_entries').select('*, account_item:account_items(*), tax_category:tax_categories(*), client:clients(*)').eq('id', id).single()
+    supabase
+      .from('journal_entries')
+      .select('*, account_item:account_items(*), tax_category:tax_categories(*), client:clients(*)')
+      .eq('id', id)
+      .single()
   ),
 
   create: (data: Partial<JournalEntry>) => handleResponse<JournalEntry>(

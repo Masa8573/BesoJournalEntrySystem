@@ -133,21 +133,47 @@ export interface Tag {
   updated_at: string;
 }
 
+// DBテーブル名: processing_rules
 export interface Rule {
   id: string;
-  priority: number;
-  rule_type: '支出' | '収入';
-  industry_id: string | null;
+  organization_id: string | null;
   client_id: string | null;
-  supplier_pattern: string | null;
-  transaction_pattern: string | null;
-  amount_min: number | null;
-  amount_max: number | null;
-  account_item_id: string | null;
-  tax_category_id: string | null;
-  status: 'active' | 'inactive';
+  industry_id: string | null;
+
+  rule_name: string;
+  priority: number;
+
+  scope: 'shared' | 'industry' | 'client';
+  rule_type: '支出' | '収入';
+
+  // 条件: { supplier_pattern?, amount_min?, amount_max?, transaction_pattern? }
+  conditions: {
+    supplier_pattern?: string | null;
+    transaction_pattern?: string | null;
+    amount_min?: number | null;
+    amount_max?: number | null;
+  };
+
+  // アクション: { account_item_id?, tax_category_id?, description_template? }
+  actions: {
+    account_item_id?: string | null;
+    tax_category_id?: string | null;
+    description_template?: string | null;
+  };
+
+  is_active: boolean;
+  auto_apply: boolean;
+  require_confirmation: boolean;
+
+  match_count: number;
+  last_matched_at: string | null;
+
   created_at: string;
   updated_at: string;
+
+  // JOINリレーション（SELECT時）
+  industry?: Industry;
+  client?: Client;
 }
 
 export interface Document {
@@ -251,8 +277,6 @@ export interface JournalEntryWithRelations extends JournalEntry {
 export interface RuleWithRelations extends Rule {
   account_item?: AccountItem;
   tax_category?: TaxCategory;
-  industry?: Industry;
-  client?: Client;
 }
 
 // ============================================
