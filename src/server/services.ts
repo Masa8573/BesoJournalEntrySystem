@@ -23,8 +23,8 @@ export interface OCRResult {
 
 export async function processOCR(imageUrl: string): Promise<OCRResult> {
   try {
-    // gemini-2.0-flash に変更
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+    // gemini-2.5-pro に変更
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
 
     // URL から画像を取得して Base64 エンコード
     const fetchRes = await fetch(imageUrl);
@@ -163,8 +163,8 @@ export async function generateJournalEntry(
   input: JournalEntryInput
 ): Promise<GeneratedJournalEntry> {
   try {
-    // gemini-2.0-flash に変更
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+    // gemini-2.5-pro に変更
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
 
     const prompt = `
 あなたは日本の税理士のアシスタントAIです。以下の取引情報から適切な仕訳を生成してください。
@@ -217,8 +217,8 @@ JSONのみを返してください。
 `;
 
     const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
+    const geminiRes = await result.response;
+    const text = geminiRes.text();
 
     // JSONを抽出
     const jsonMatch = text.match(/```json\n([\s\S]*?)\n```/) || text.match(/\{[\s\S]*\}/);
