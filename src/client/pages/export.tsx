@@ -13,14 +13,14 @@ import { useWorkflow } from '@/client/context/WorkflowContext';
 import { supabase } from '@/client/lib/supabase';
 import ProgressBar from '@/client/components/workflow/ProgressBar';
 import WorkflowNavigation from '@/client/components/workflow/WorkflowNavigation';
-import type { JournalEntryWithRelations } from '@/types';
+import type { JournalEntryWithRelations, JournalEntryLine } from '@/types';
 
 // ============================================
 // 型定義
 // ============================================
 
 type PeriodFilter = '全期間' | '本日' | '今週' | '今月' | '先月' | 'カスタム';
-type CategoryFilter = '全て' | '事業用' | 'プライベート';
+type ExcludedFilter = '全て' | '事業用のみ' | '対象外除く';
 type ActiveTab = '出力' | '出力履歴';
 
 interface ExportRecord {
@@ -93,24 +93,44 @@ function formatCurrency(amount: number): string {
   return `¥${amount.toLocaleString('ja-JP')}`;
 }
 
+/** 明細行の借方合計を返す（ヘッダー単位の金額として使用） */
+function getEntryAmount(entry: JournalEntryWithRelations): number {
+  if (!entry.lines || entry.lines.length === 0) return 0;
+  return entry.lines
+    .filter((l: JournalEntryLine) => l.debit_credit === 'debit')
+    .reduce((sum: number, l: JournalEntryLine) => sum + (l.amount ?? 0), 0);
+}
+
+/** 先頭の借方明細行を返す（科目・税区分の代表値として使用） */
+function getFirstDebitLine(entry: JournalEntryWithRelations): JournalEntryLine | undefined {
+  return entry.lines?.find((l: JournalEntryLine) => l.debit_credit === 'debit');
+}
+
 // ============================================
 // CSV生成（freee取込フォーマット準拠、UTF-8 BOM付き）
 // ============================================
 
+// NOTE: account_item / tax_category の名前解決には
+//       SELECT時にJOINしたデータが必要。現状はIDのみのためプレースホルダー。
+//       実装フェーズでSupabaseのSELECTクエリにJOINを追加すること。
 function buildCsvContent(entries: JournalEntryWithRelations[]): string {
   const headers = ['取引日', '借方科目', '借方税区分', '借方金額', '貸方科目', '貸方税区分', '貸方金額', '摘要'];
-  const rows = entries.map((e) => [
-    e.entry_date ?? '',
-    e.account_item?.name ?? '',
-    e.tax_category?.display_name ?? e.tax_category?.name ?? '',
-    e.amount?.toString() ?? '0',
-    '', // 貸方科目は今フェーズでは空
-    '',
-    '',
-    e.notes ?? '',
-  ]);
-  const csv = [headers, ...rows].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\r\n');
-  // UTF-8 BOM
+  const rows = entries.map((e) => {
+    const firstLine = getFirstDebitLine(e);
+    return [
+      e.entry_date ?? '',
+      firstLine?.account_item_id ?? '',   // TODO: JOIN後は account_item?.name に変更
+      firstLine?.tax_category_id ?? '',   // TODO: JOIN後は tax_category?.name に変更
+      firstLine?.amount?.toString() ?? '0',
+      '',
+      '',
+      '',
+      e.description ?? '',
+    ];
+  });
+  const csv = [headers, ...rows]
+    .map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(','))
+    .join('\r\n');
   return '\uFEFF' + csv;
 }
 
@@ -130,11 +150,11 @@ function downloadCsv(content: string, filename: string) {
 
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, { label: string; cls: string }> = {
-    completed: { label: '完了', cls: 'bg-green-100 text-green-800' },
-    pending:   { label: '処理中', cls: 'bg-yellow-100 text-yellow-800' },
-    processing:{ label: '処理中', cls: 'bg-blue-100 text-blue-800' },
-    error:     { label: 'エラー', cls: 'bg-red-100 text-red-800' },
-    cancelled: { label: 'キャンセル', cls: 'bg-gray-100 text-gray-700' },
+    completed:  { label: '完了',       cls: 'bg-green-100 text-green-800' },
+    pending:    { label: '処理中',     cls: 'bg-yellow-100 text-yellow-800' },
+    processing: { label: '処理中',     cls: 'bg-blue-100 text-blue-800' },
+    error:      { label: 'エラー',     cls: 'bg-red-100 text-red-800' },
+    cancelled:  { label: 'キャンセル', cls: 'bg-gray-100 text-gray-700' },
   };
   const { label, cls } = map[status] ?? { label: status, cls: 'bg-gray-100 text-gray-700' };
   return (
@@ -153,25 +173,19 @@ export default function ExportPage() {
   const [searchParams] = useSearchParams();
   const clientId = searchParams.get('client_id') ?? currentWorkflow?.clientId ?? '';
 
-  // タブ
   const [activeTab, setActiveTab] = useState<ActiveTab>('出力');
-
-  // 期間フィルター
   const [periodFilter, setPeriodFilter] = useState<PeriodFilter>('今月');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
+  const [excludedFilter, setExcludedFilter] = useState<ExcludedFilter>('全て');
 
-  // カテゴリフィルター & サマリーカード選択
-  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('全て');
-
-  // データ
   const [entries, setEntries] = useState<JournalEntryWithRelations[]>([]);
   const [exportHistory, setExportHistory] = useState<ExportRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [historyLoading, setHistoryLoading] = useState(false);
 
   // ============================================
-  // 仕訳データ取得
+  // 仕訳データ取得（lines を JOIN）
   // ============================================
 
   useEffect(() => {
@@ -183,9 +197,9 @@ export default function ExportPage() {
     setLoading(true);
     const { data, error } = await supabase
       .from('journal_entries')
-      .select('*, account_item:account_items(*), tax_category:tax_categories(*)')
+      .select('*, lines:journal_entry_lines(*)')
       .eq('client_id', clientId)
-      .in('status', ['approved', 'exported'])
+      .in('status', ['approved', 'posted'])
       .order('entry_date', { ascending: false });
 
     if (!error && data) {
@@ -199,9 +213,7 @@ export default function ExportPage() {
   // ============================================
 
   useEffect(() => {
-    if (activeTab === '出力履歴' && clientId) {
-      loadHistory();
-    }
+    if (activeTab === '出力履歴' && clientId) loadHistory();
   }, [activeTab, clientId]);
 
   const loadHistory = async () => {
@@ -212,9 +224,7 @@ export default function ExportPage() {
       .eq('client_id', clientId)
       .order('created_at', { ascending: false });
 
-    if (!error && data) {
-      setExportHistory(data as ExportRecord[]);
-    }
+    if (!error && data) setExportHistory(data as ExportRecord[]);
     setHistoryLoading(false);
   };
 
@@ -234,23 +244,26 @@ export default function ExportPage() {
   }, [entries, periodFilter, customStart, customEnd]);
 
   const filteredEntries = useMemo(() => {
-    if (categoryFilter === '全て') return filteredByPeriod;
-    return filteredByPeriod.filter((e) => e.category === categoryFilter);
-  }, [filteredByPeriod, categoryFilter]);
+    switch (excludedFilter) {
+      case '対象外除く': return filteredByPeriod.filter((e) => !e.is_excluded);
+      case '事業用のみ': return filteredByPeriod.filter((e) => !e.is_excluded);
+      default: return filteredByPeriod;
+    }
+  }, [filteredByPeriod, excludedFilter]);
 
   // ============================================
-  // サマリー集計
+  // サマリー集計（新型: is_excluded で区別、金額は lines の借方合計）
   // ============================================
 
   const summary = useMemo(() => {
-    const business = filteredByPeriod.filter((e) => e.category === '事業用');
-    const personal = filteredByPeriod.filter((e) => e.category === 'プライベート');
-    const businessTotal = business.reduce((sum, e) => sum + (e.amount ?? 0), 0);
+    const active   = filteredByPeriod.filter((e) => !e.is_excluded);
+    const excluded = filteredByPeriod.filter((e) => e.is_excluded);
+    const total    = filteredByPeriod.reduce((sum, e) => sum + getEntryAmount(e), 0);
     return {
       total: filteredByPeriod.length,
-      business: business.length,
-      personal: personal.length,
-      businessTotal,
+      active: active.length,
+      excluded: excluded.length,
+      totalAmount: total,
     };
   }, [filteredByPeriod]);
 
@@ -278,9 +291,7 @@ export default function ExportPage() {
           <p className="text-gray-600 mb-6">
             仕訳出力を行うには、顧客一覧からワークフローを開始してください。
           </p>
-          <a href="/clients" className="btn-primary">
-            顧客一覧へ戻る
-          </a>
+          <a href="/clients" className="btn-primary">顧客一覧へ戻る</a>
         </div>
       </div>
     );
@@ -349,65 +360,29 @@ export default function ExportPage() {
                     </button>
                   ))}
                 </div>
-
-                {/* カスタム期間入力 */}
                 {periodFilter === 'カスタム' && (
                   <div className="flex items-center gap-3 mt-4">
-                    <input
-                      type="date"
-                      value={customStart}
-                      onChange={(e) => setCustomStart(e.target.value)}
-                      className="input w-auto text-sm"
-                    />
+                    <input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} className="input w-auto text-sm" />
                     <ChevronDown size={14} className="text-gray-400 rotate-[-90deg]" />
-                    <input
-                      type="date"
-                      value={customEnd}
-                      onChange={(e) => setCustomEnd(e.target.value)}
-                      className="input w-auto text-sm"
-                    />
+                    <input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} className="input w-auto text-sm" />
                   </div>
                 )}
               </div>
 
-              {/* サマリーカード（4枚）*/}
+              {/* サマリーカード（4枚） */}
               <div className="grid grid-cols-4 gap-4">
                 {[
-                  {
-                    label: '総仕訳数',
-                    value: `${summary.total} 件`,
-                    active: categoryFilter === '全て',
-                    onClick: () => setCategoryFilter('全て'),
-                    color: 'blue',
-                  },
-                  {
-                    label: '事業用件数',
-                    value: `${summary.business} 件`,
-                    active: categoryFilter === '事業用',
-                    onClick: () => setCategoryFilter('事業用'),
-                    color: 'green',
-                  },
-                  {
-                    label: 'プライベート件数',
-                    value: `${summary.personal} 件`,
-                    active: categoryFilter === 'プライベート',
-                    onClick: () => setCategoryFilter('プライベート'),
-                    color: 'purple',
-                  },
-                  {
-                    label: '事業用合計金額',
-                    value: formatCurrency(summary.businessTotal),
-                    active: false,
-                    onClick: () => {},
-                    color: 'orange',
-                  },
+                  { label: '総仕訳数',     value: `${summary.total} 件`,          filter: '全て'      as ExcludedFilter },
+                  { label: '出力対象',     value: `${summary.active} 件`,         filter: '対象外除く' as ExcludedFilter },
+                  { label: '対象外',       value: `${summary.excluded} 件`,       filter: null },
+                  { label: '合計金額',     value: formatCurrency(summary.totalAmount), filter: null },
                 ].map((card) => (
                   <button
                     key={card.label}
-                    onClick={card.onClick}
+                    onClick={() => card.filter && setExcludedFilter(card.filter)}
                     className={`card text-left transition-all hover:shadow-md ${
-                      card.active ? 'ring-2 ring-blue-500 bg-blue-50' : ''
-                    }`}
+                      card.filter && excludedFilter === card.filter ? 'ring-2 ring-blue-500 bg-blue-50' : ''
+                    } ${!card.filter ? 'cursor-default' : ''}`}
                   >
                     <h3 className="text-xs font-medium text-gray-500 mb-2">{card.label}</h3>
                     <div className="text-2xl font-bold text-gray-900">{card.value}</div>
@@ -420,25 +395,21 @@ export default function ExportPage() {
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-3">
                     <h2 className="text-lg font-semibold text-gray-900">仕訳一覧</h2>
-                    <span className="text-sm text-gray-500">
-                      {filteredEntries.length} 件
-                    </span>
+                    <span className="text-sm text-gray-500">{filteredEntries.length} 件</span>
                   </div>
 
                   <div className="flex items-center gap-2">
-                    {/* カテゴリ切り替えボタン */}
+                    {/* フィルター切り替え */}
                     <div className="flex rounded-lg border border-gray-300 overflow-hidden">
-                      {(['全て', '事業用', 'プライベート'] as CategoryFilter[]).map((c) => (
+                      {(['全て', '対象外除く'] as ExcludedFilter[]).map((f) => (
                         <button
-                          key={c}
-                          onClick={() => setCategoryFilter(c)}
+                          key={f}
+                          onClick={() => setExcludedFilter(f)}
                           className={`px-3 py-1.5 text-sm transition-colors ${
-                            categoryFilter === c
-                              ? 'bg-blue-600 text-white'
-                              : 'bg-white text-gray-600 hover:bg-gray-50'
+                            excludedFilter === f ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
                           }`}
                         >
-                          {c}
+                          {f}
                         </button>
                       ))}
                     </div>
@@ -454,7 +425,7 @@ export default function ExportPage() {
                       CSV ダウンロード
                     </button>
 
-                    {/* freee 連携（APIキー未設定プレースホルダー）*/}
+                    {/* freee 連携（未実装プレースホルダー）*/}
                     <button
                       disabled
                       title="freee APIキーが設定されていません"
@@ -482,50 +453,49 @@ export default function ExportPage() {
                     <table className="w-full text-sm">
                       <thead className="bg-gray-50 border-b border-gray-200">
                         <tr>
-                          {['取引日', '区分', '勘定科目', '税区分', '金額', '取引先', '摘要'].map((h) => (
-                            <th
-                              key={h}
-                              className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap"
-                            >
+                          {['取引日', '勘定科目（借方）', '税区分', '金額', '取引先', '摘要', '対象外'].map((h) => (
+                            <th key={h} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
                               {h}
                             </th>
                           ))}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
-                        {filteredEntries.map((entry) => (
-                          <tr key={entry.id} className="hover:bg-gray-50 transition-colors">
-                            <td className="px-4 py-3 whitespace-nowrap text-gray-700">
-                              {formatDate(entry.entry_date)}
-                            </td>
-                            <td className="px-4 py-3 whitespace-nowrap">
-                              <span
-                                className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                                  entry.category === '事業用'
-                                    ? 'bg-green-100 text-green-800'
-                                    : 'bg-purple-100 text-purple-800'
-                                }`}
-                              >
-                                {entry.category}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 whitespace-nowrap text-gray-900 font-medium">
-                              {entry.account_item?.name ?? '-'}
-                            </td>
-                            <td className="px-4 py-3 whitespace-nowrap text-gray-600">
-                              {entry.tax_category?.display_name ?? entry.tax_category?.name ?? '-'}
-                            </td>
-                            <td className="px-4 py-3 whitespace-nowrap text-right font-mono text-gray-900">
-                              {formatCurrency(entry.amount)}
-                            </td>
-                            <td className="px-4 py-3 whitespace-nowrap text-gray-600 max-w-[120px] truncate">
-                              {entry.supplier ?? '-'}
-                            </td>
-                            <td className="px-4 py-3 text-gray-600 max-w-[200px] truncate">
-                              {entry.notes ?? '-'}
-                            </td>
-                          </tr>
-                        ))}
+                        {filteredEntries.map((entry) => {
+                          const firstLine = getFirstDebitLine(entry);
+                          const amount    = getEntryAmount(entry);
+                          return (
+                            <tr key={entry.id} className={`hover:bg-gray-50 transition-colors ${entry.is_excluded ? 'opacity-50' : ''}`}>
+                              <td className="px-4 py-3 whitespace-nowrap text-gray-700">
+                                {formatDate(entry.entry_date)}
+                              </td>
+                              <td className="px-4 py-3 whitespace-nowrap text-gray-900 font-medium">
+                                {/* TODO: account_items JOIN後は name を表示 */}
+                                {firstLine?.account_item_id ?? '-'}
+                              </td>
+                              <td className="px-4 py-3 whitespace-nowrap text-gray-600">
+                                {/* TODO: tax_categories JOIN後は name を表示 */}
+                                {firstLine?.tax_category_id ?? '-'}
+                              </td>
+                              <td className="px-4 py-3 whitespace-nowrap text-right font-mono text-gray-900">
+                                {formatCurrency(amount)}
+                              </td>
+                              <td className="px-4 py-3 whitespace-nowrap text-gray-600 max-w-[120px] truncate">
+                                {entry.supplier?.name ?? '-'}
+                              </td>
+                              <td className="px-4 py-3 text-gray-600 max-w-[200px] truncate">
+                                {entry.description ?? '-'}
+                              </td>
+                              <td className="px-4 py-3 whitespace-nowrap">
+                                {entry.is_excluded && (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                                    対象外
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -538,7 +508,6 @@ export default function ExportPage() {
           {activeTab === '出力履歴' && (
             <div className="card">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">出力履歴</h2>
-
               {historyLoading ? (
                 <div className="flex items-center justify-center py-16">
                   <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
@@ -554,10 +523,7 @@ export default function ExportPage() {
                     <thead className="bg-gray-50 border-b border-gray-200">
                       <tr>
                         {['出力日時', '種別', '件数', 'ファイル名', '対象期間', 'ステータス'].map((h) => (
-                          <th
-                            key={h}
-                            className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap"
-                          >
+                          <th key={h} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
                             {h}
                           </th>
                         ))}
@@ -566,17 +532,11 @@ export default function ExportPage() {
                     <tbody className="divide-y divide-gray-100">
                       {exportHistory.map((rec) => (
                         <tr key={rec.id} className="hover:bg-gray-50 transition-colors">
-                          <td className="px-4 py-3 whitespace-nowrap text-gray-700">
-                            {formatDateTime(rec.created_at)}
-                          </td>
+                          <td className="px-4 py-3 whitespace-nowrap text-gray-700">{formatDateTime(rec.created_at)}</td>
                           <td className="px-4 py-3 whitespace-nowrap">
-                            <span
-                              className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                                rec.export_format === 'freee'
-                                  ? 'bg-blue-100 text-blue-800'
-                                  : 'bg-green-100 text-green-800'
-                              }`}
-                            >
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                              rec.export_format === 'freee' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'
+                            }`}>
                               {rec.export_format === 'freee' ? 'freee' : 'CSV'}
                             </span>
                           </td>
