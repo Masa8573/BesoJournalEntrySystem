@@ -25,14 +25,13 @@ interface JournalEntryLine {
   id: string;
   journal_entry_id: string;
   line_number: number;
-  debit_account_item_id?: string;
-  credit_account_item_id?: string;
+  debit_credit: 'debit' | 'credit';
+  account_item_id?: string;
   tax_category_id?: string;
   amount?: number;
   description?: string;
   // relations
-  debit_account?: AccountItem;
-  credit_account?: AccountItem;
+  account_item?: AccountItem;
   tax_category?: TaxCategory;
 }
 
@@ -79,13 +78,12 @@ export default function AiCheckPage() {
         *,
         journal_entry_lines (
           *,
-          debit_account:account_items!journal_entry_lines_debit_account_item_id_fkey(*),
-          credit_account:account_items!journal_entry_lines_credit_account_item_id_fkey(*),
+          account_item:account_items(*),
           tax_category:tax_categories(*)
         )
       `)
       .eq('client_id', clientId)
-      .eq('status', 'pending')
+      .eq('status', 'draft')
       .order('entry_date', { ascending: false });
 
     if (error) {
@@ -95,12 +93,13 @@ export default function AiCheckPage() {
     if (entriesData) {
       // 表示用にフラット化
       const flatEntries: EntryWithLines[] = entriesData.map((entry: any) => {
-        const firstLine = entry.journal_entry_lines?.[0];
+        const debitLine = entry.journal_entry_lines?.find((l: any) => l.debit_credit === 'debit')
+          ?? entry.journal_entry_lines?.[0];
         return {
           ...entry,
-          account_item_name: firstLine?.debit_account?.name,
-          tax_category_name: firstLine?.tax_category?.name,
-          amount: firstLine?.amount,
+          account_item_name: debitLine?.account_item?.name,
+          tax_category_name: debitLine?.tax_category?.name,
+          amount: debitLine?.amount,
         };
       });
       setEntries(flatEntries);
@@ -125,7 +124,7 @@ export default function AiCheckPage() {
     setEditingId(entry.id);
     const firstLine = entry.journal_entry_lines?.[0];
     setEditForm({
-      account_item_id: firstLine?.debit_account_item_id,
+      account_item_id: firstLine?.account_item_id,
       tax_category_id: firstLine?.tax_category_id,
       amount: firstLine?.amount,
       notes: entry.notes,
@@ -145,7 +144,7 @@ export default function AiCheckPage() {
       await supabase
         .from('journal_entry_lines')
         .update({
-          debit_account_item_id: editForm.account_item_id,
+          account_item_id: editForm.account_item_id,
           tax_category_id: editForm.tax_category_id,
           amount: editForm.amount,
         })
@@ -168,7 +167,7 @@ export default function AiCheckPage() {
   const handleApprove = async (id: string) => {
     await supabase
       .from('journal_entries')
-      .update({ status: 'approved' })
+      .update({ status: 'pending' })  // reviewページで pending をフィルタ
       .eq('id', id);
     await loadData();
   };
@@ -190,7 +189,7 @@ export default function AiCheckPage() {
     if (window.confirm(`${entries.length}件の仕訳を一括承認しますか？`)) {
       await supabase
         .from('journal_entries')
-        .update({ status: 'approved' })
+        .update({ status: 'pending' })  // reviewページで pending をフィルタ
         .in(
           'id',
           entries.map((e) => e.id)

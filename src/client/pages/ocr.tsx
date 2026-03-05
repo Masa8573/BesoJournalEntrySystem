@@ -158,16 +158,25 @@ export default function OCRPage() {
         // -----------------------------------------------
         // STEP 5: 仕訳を journal_entries テーブルに保存
         // -----------------------------------------------
+        // organization_id を取得（RLSポリシー必須）
+        const { data: { user: authUser } } = await supabase.auth.getUser();
+        const { data: userRow } = await supabase
+          .from('users')
+          .select('organization_id')
+          .eq('id', authUser!.id)
+          .single();
+
         const { data: savedEntry, error: dbSaveError } = await supabase
           .from('journal_entries')
           .insert({
+            organization_id: userRow!.organization_id,
             client_id: currentWorkflow!.clientId,
             document_id: result.documentId,
             entry_date: journalEntry.entry_date || ocrResult.extracted_date,
             entry_type: 'normal',
             description: journalEntry.notes,
             status: 'pending',
-            notes: journalEntry.notes,
+            ai_generated: true,
             ai_confidence: journalEntry.confidence,
           })
           .select()
