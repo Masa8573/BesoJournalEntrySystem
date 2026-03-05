@@ -56,6 +56,23 @@ export const workflowsApi = {
 
   /** 新規作成 */
   create: async (clientId: string, clientName: string): Promise<WorkflowState | null> => {
+    // organization_id を取得（RLS の WITH CHECK に必要）
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      console.error('Failed to create workflow: not authenticated');
+      return null;
+    }
+    const { data: userRow, error: userError } = await supabase
+      .from('users')
+      .select('organization_id')
+      .eq('id', user.id)
+      .single();
+    if (userError || !userRow?.organization_id) {
+      console.error('Failed to get organization_id:', userError);
+      return null;
+    }
+    const organizationId = userRow.organization_id;
+
     // 既存の進行中ワークフローをキャンセル
     await supabase
       .from('workflows')
@@ -66,6 +83,7 @@ export const workflowsApi = {
     const { data, error } = await supabase
       .from('workflows')
       .insert({
+        organization_id: organizationId,
         client_id: clientId,
         current_step: 1,
         completed_steps: [],
