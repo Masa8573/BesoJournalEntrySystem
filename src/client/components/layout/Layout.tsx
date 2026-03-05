@@ -120,9 +120,8 @@ function Sidebar() {
               </Link>
 
               {/* ワークフロー系サブメニュー */}
-              <div className="mt-1 space-y-1">
-                {workflowItems.map((item, index, array) => {
-                  const isLast = index === array.length - 1;
+              <div className="mt-1 ml-4 border-l-2 border-gray-200 space-y-0.5">
+                {workflowItems.map((item) => {
                   const active = isActive(item.path);
                   const disabled = item.path === '#';
                   return (
@@ -130,7 +129,7 @@ function Sidebar() {
                       key={item.path + item.label}
                       to={item.path}
                       onClick={(e) => { if (disabled) e.preventDefault(); }}
-                      className={`flex items-center gap-2 px-3 py-1.5 ml-6 text-sm rounded-md transition-colors ${
+                      className={`flex items-center gap-2 px-3 py-1.5 ml-2 text-sm rounded-md transition-colors ${
                         disabled
                           ? 'text-gray-400 cursor-not-allowed'
                           : active
@@ -138,9 +137,6 @@ function Sidebar() {
                             : 'text-gray-600 hover:bg-gray-100'
                       }`}
                     >
-                      <span className="text-gray-400 font-mono -mr-1">
-                        {isLast ? '└' : '├'}
-                      </span>
                       <span className={active ? 'text-blue-600' : 'text-gray-400'}>
                         {item.icon}
                       </span>
