@@ -44,7 +44,6 @@ export interface AccountCategory {
   created_at: string;
 }
 
-// ① Client 型に新規カラムを追加
 export interface Client {
   id: string;
   organization_id: string;
@@ -55,11 +54,6 @@ export interface Client {
   invoice_registered: boolean;
   use_custom_rules: boolean;
   status: 'active' | 'inactive';
-  // 追加カラム
-  is_taxable: boolean;
-  tax_method: '原則課税' | '簡易課税' | null;
-  invoice_number: string | null;
-  auto_rule_addition: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -128,16 +122,13 @@ export interface TaxCategory {
   updated_at: string;
 }
 
-// ④ Tag 型を修正（status削除、organization_id/client_id/is_active追加）
 export interface Tag {
   id: string;
-  organization_id: string;
-  client_id: string | null;
-  tag_type: 'supplier' | 'item' | 'document' | 'journal_entry' | 'general';
+  tag_type: 'supplier' | 'item';
   name: string;
   color: string | null;
   description: string | null;
-  is_active: boolean;
+  status: 'active' | 'inactive';
   created_at: string;
   updated_at: string;
 }
@@ -187,19 +178,38 @@ export interface Rule {
 
 export interface Document {
   id: string;
-  organization_id: string;
+  organization_id: string | null;
   client_id: string;
   workflow_id: string | null;
-  uploaded_by: string;
-  file_path: string;
+  document_type_id: string | null;
+  document_number: string | null;
+  document_date: string;             // DBの document_date（upload_dateより優先）
   file_name: string;
-  file_type: string | null;
+  original_file_name: string | null; // ADD COLUMN で追加済み
+  file_path: string;
+  storage_path: string | null;       // ADD COLUMN で追加済み
   file_size: number | null;
-  upload_date: string;
-  ocr_status: 'pending' | 'processing' | 'completed' | 'failed';
-  ocr_completed_at: string | null;
-  is_excluded: boolean;
-  exclusion_reason: string | null;
+  file_type: string | null;
+  page_count: number | null;         // ADD COLUMN で追加済み
+  ocr_status: 'pending' | 'processing' | 'completed' | 'error' | 'skipped';
+  ocr_confidence: number | null;     // numeric(5,4) → 0.0〜1.0
+  supplier_name: string | null;
+  supplier_id: string | null;
+  amount: number | null;
+  tax_amount: number | null;
+  status: 'uploaded' | 'ocr_processing' | 'ocr_completed' | 'ai_processing' | 'reviewed' | 'approved' | 'exported' | 'excluded';
+  is_business: boolean;
+  is_processed: boolean;
+  tags: string[] | null;
+  notes: string | null;
+  timestamp_token: string | null;
+  hash_value: string | null;
+  uploaded_by: string | null;
+  // 旧フィールド（後方互換性のために残す）
+  upload_date?: string;
+  ocr_completed_at?: string | null;
+  is_excluded?: boolean;
+  exclusion_reason?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -217,46 +227,26 @@ export interface OCRResult {
   created_at: string;
 }
 
-// ② JournalEntry 型を DB の実構造（journal_entries ヘッダー）に再設計
 export interface JournalEntry {
   id: string;
-  organization_id: string;
-  client_id: string;
   document_id: string | null;
+  client_id: string;
   entry_date: string;
-  entry_number: string | null;
-  entry_type: 'normal' | 'adjusting' | 'closing' | 'opening' | 'reversal';
-  description: string | null;
-  supplier_id: string | null;
-  status: 'draft' | 'pending' | 'approved' | 'posted' | 'rejected';
-  requires_review: boolean;
-  ai_generated: boolean;
-  ai_confidence: number | null;
-  is_excluded: boolean;
-  excluded_reason: string | null;
-  excluded_by: string | null;
-  excluded_at: string | null;
+  category: '事業用' | 'プライベート';
+  supplier: string | null;
+  account_item_id: string | null;
+  tax_category_id: string | null;
+  amount: number;
+  tax_amount: number | null;
+  notes: string | null;
+  status: 'pending' | 'approved' | 'exported';
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  exported_to_freee: boolean;
+  freee_transaction_id: string | null;
   exported_at: string | null;
-  export_id: string | null;
   created_at: string;
   updated_at: string;
-  created_by: string | null;
-}
-
-// ② journal_entry_lines（仕訳明細行）型を新規追加
-export interface JournalEntryLine {
-  id: string;
-  journal_entry_id: string;
-  line_number: number;
-  debit_credit: 'debit' | 'credit';
-  account_item_id: string;
-  supplier_id: string | null;
-  item_id: string | null;
-  amount: number;
-  tax_category_id: string | null;
-  tax_rate: number | null;
-  tax_amount: number | null;
-  description: string | null;
 }
 
 export interface BatchHistory {
@@ -269,81 +259,6 @@ export interface BatchHistory {
   pending_entries: number;
   status: 'in_progress' | 'completed';
   progress_percentage: number;
-  created_at: string;
-  updated_at: string;
-}
-
-// ③ Supplier（取引先）型を新規追加
-export interface Supplier {
-  id: string;
-  organization_id: string;
-  client_id: string | null;
-  code: string | null;
-  name: string;
-  name_kana: string | null;
-  invoice_number: string | null;
-  is_invoice_registered: boolean;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-// ③ SupplierAlias（取引先別名）型を新規追加
-export interface SupplierAlias {
-  id: string;
-  supplier_id: string;
-  alias_name: string;
-  source: 'manual' | 'ai_suggested' | 'imported';
-  created_at: string;
-}
-
-// ③ ClientAccountRatio（家事按分率）型を新規追加
-export interface ClientAccountRatio {
-  id: string;
-  organization_id: string;
-  client_id: string;
-  account_item_id: string;
-  business_ratio: number;   // 0〜1の数値（例: 0.70）
-  valid_from: string;       // date
-  valid_until: string | null; // null は無期限
-  notes: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-// ③ ClientTaxCategorySetting（税区分の顧客別設定）型を新規追加
-export interface ClientTaxCategorySetting {
-  id: string;
-  organization_id: string;
-  client_id: string;
-  tax_category_id: string;
-  use_as_default: boolean;
-  use_for_income: boolean;
-  use_for_expense: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-// ③ Workflow（ワークフロー状態）型を新規追加
-export interface WorkflowData {
-  uploaded_document_ids: string[];
-  ocr_completed_ids: string[];
-  ocr_pending_ids: string[];
-  aicheck_status: 'pending' | 'completed';
-  review_completed_at: string | null;
-}
-
-export interface Workflow {
-  id: string;
-  organization_id: string;
-  client_id: string;
-  current_step: number;         // 1〜8
-  completed_steps: number[];
-  status: 'in_progress' | 'completed' | 'cancelled';
-  started_by: string | null;
-  started_at: string;
-  completed_at: string | null;
-  data: WorkflowData;
   created_at: string;
   updated_at: string;
 }
@@ -373,10 +288,9 @@ export interface ClientWithIndustry extends Client {
   industry?: Industry;
 }
 
-// ⑤ JournalEntryWithRelations を journal_entry_lines 含む構造に更新
 export interface JournalEntryWithRelations extends JournalEntry {
-  lines?: JournalEntryLine[];
-  supplier?: Supplier;
+  account_item?: AccountItem;
+  tax_category?: TaxCategory;
   client?: Client;
   document?: Document;
 }
@@ -397,10 +311,6 @@ export interface ClientFormData {
   tax_category: '原則課税' | '簡易課税' | '免税';
   invoice_registered: boolean;
   use_custom_rules: boolean;
-  is_taxable: boolean;
-  tax_method: '原則課税' | '簡易課税' | null;
-  invoice_number: string | null;
-  auto_rule_addition: boolean;
 }
 
 export interface RuleFormData {
@@ -418,16 +328,13 @@ export interface RuleFormData {
 
 export interface JournalEntryFormData {
   entry_date: string;
-  description: string | null;
-  supplier_id: string | null;
-  lines: {
-    debit_credit: 'debit' | 'credit';
-    account_item_id: string;
-    tax_category_id: string | null;
-    amount: number;
-    tax_amount: number | null;
-    description: string | null;
-  }[];
+  category: '事業用' | 'プライベート';
+  supplier: string;
+  account_item_id: string;
+  tax_category_id: string;
+  amount: number;
+  tax_amount: number | null;
+  notes: string | null;
 }
 
 // ============================================

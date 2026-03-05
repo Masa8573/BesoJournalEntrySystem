@@ -24,6 +24,7 @@ import AccountsPage from './pages/master/accounts';
 import TagsPage from './pages/master/tags';
 import TaxCategoriesPage from './pages/master/taxCategories';
 import IndustriesPage from './pages/master/industries';
+import SuppliersPage from './pages/master/suppliers';
 import SettingsPage from './pages/settings';
 
 // ============================================================
@@ -63,16 +64,13 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
     });
 
     // 2. ログイン・ログアウト・セッション更新を自動検知
-    //    Google OAuth のコールバック（URLの #access_token など）もここで処理される
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
-      // loading が true のままなら false にする（OAuth リダイレクト直後対応）
       setLoading(false);
     });
 
-    // クリーンアップ
     return () => subscription.unsubscribe();
   }, []);
 
@@ -85,12 +83,10 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
 
 // ============================================================
 // PrivateRoute
-// 未認証ならログインページへリダイレクトする保護ルート
 // ============================================================
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
 
-  // セッション確認中はスピナーを表示（ちらつき防止）
   if (loading) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-50">
@@ -102,7 +98,6 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // 未認証 → /login へリダイレクト
   if (!user) {
     return <Navigate to="/login" replace />;
   }
@@ -132,23 +127,26 @@ function App() {
                       {/* デフォルトルート */}
                       <Route path="/" element={<Navigate to="/clients" replace />} />
 
-                      {/* 業務メニュー */}
+                      {/* 顧客一覧 */}
                       <Route path="/clients" element={<ClientsPage />} />
-                      <Route path="/upload" element={<UploadPage />} />
-                      <Route path="/ocr" element={<OCRPage />} />
-                      <Route path="/aicheck" element={<AiCheckPage />} />
-                      <Route path="/review" element={<ReviewPage />} />
-                      <Route path="/export" element={<ExportPage />} />
-                      <Route path="/summary" element={<SummaryPage />} />
-                      <Route path="/excluded" element={<ExcludedPage />} />
+
+                      {/* ワークフロー系（/clients/:id/ 配下） */}
+                      <Route path="/clients/:id/upload"   element={<UploadPage />} />
+                      <Route path="/clients/:id/ocr"      element={<OCRPage />} />
+                      <Route path="/clients/:id/aicheck"  element={<AiCheckPage />} />
+                      <Route path="/clients/:id/review"   element={<ReviewPage />} />
+                      <Route path="/clients/:id/export"   element={<ExportPage />} />
+                      <Route path="/clients/:id/summary"  element={<SummaryPage />} />
+                      <Route path="/clients/:id/excluded" element={<ExcludedPage />} />
 
                       {/* マスタ管理 */}
-                      <Route path="/master/rules" element={<RulesPage />} />
-                      <Route path="/master/accounts" element={<AccountsPage />} />
-                      <Route path="/master/tags" element={<TagsPage />} />
+                      <Route path="/master/rules"          element={<RulesPage />} />
+                      <Route path="/master/accounts"       element={<AccountsPage />} />
+                      <Route path="/master/tags"           element={<TagsPage />} />
                       <Route path="/master/tax-categories" element={<TaxCategoriesPage />} />
-                      <Route path="/master/industries" element={<IndustriesPage />} />
-                      <Route path="/settings" element={<SettingsPage />} />
+                      <Route path="/master/industries"     element={<IndustriesPage />} />
+                      <Route path="/master/suppliers"      element={<SuppliersPage />} />
+                      <Route path="/settings"              element={<SettingsPage />} />
 
                       {/* 404 */}
                       <Route path="*" element={<Navigate to="/clients" replace />} />

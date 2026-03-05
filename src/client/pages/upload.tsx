@@ -2,6 +2,9 @@ import { useState, useCallback } from 'react';
 import { Upload, X, CheckCircle, AlertCircle } from 'lucide-react';
 import { useDropzone } from 'react-dropzone';
 import { useWorkflow } from '@/client/context/WorkflowContext';
+import { useAuth } from '@/client/main';
+import { supabase } from '@/client/lib/supabase';
+import { documentsApi } from '@/client/lib/api';
 import ProgressBar from '@/client/components/workflow/ProgressBar';
 import WorkflowNavigation from '@/client/components/workflow/WorkflowNavigation';
 
@@ -11,66 +14,176 @@ interface UploadedFile {
   preview: string;
   status: 'uploading' | 'success' | 'error';
   progress: number;
+  documentId?: string; // DBに保存後のID
+  storagePath?: string; // Supabase Storage のパス
+  errorMessage?: string;
 }
 
 export default function UploadPage() {
   const { currentWorkflow, updateWorkflowData } = useWorkflow();
+  const { user } = useAuth();
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
 
-  // アップロードシミュレーション
-  const simulateUpload = (fileId: string) => {
-    let progress = 0;
-    const interval = setInterval(() => {
-      progress += 10;
-      
-      setUploadedFiles((prev) =>
-        prev.map((f) =>
-          f.id === fileId
-            ? {
-                ...f,
-                progress,
-                status: progress >= 100 ? 'success' : 'uploading',
-              }
-            : f
-        )
-      );
+  // ============================================
+  // Supabase Storage へアップロード + documents テーブルに記録
+  // ============================================
+  const uploadToSupabase = async (uploadFile: UploadedFile) => {
+    if (!currentWorkflow || !user) return;
 
-      if (progress >= 100) {
-        clearInterval(interval);
-      }
-    }, 200);
+    const clientId = currentWorkflow.clientId;
+    const workflowId = currentWorkflow.id;
+
+    // organization_id を users テーブルから取得
+    const { data: userData } = await supabase
+      .from('users')
+      .select('organization_id')
+      .eq('id', user.id)
+      .single();
+
+    const organizationId = userData?.organization_id;
+
+    // Storage パス構造: documents/{organization_id}/{client_id}/{workflow_id}/{timestamp}_{filename}
+    const timestamp = Date.now();
+    const safeName = uploadFile.file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const storagePath = organizationId
+      ? `documents/${organizationId}/${clientId}/${workflowId}/${timestamp}_${safeName}`
+      : `documents/${clientId}/${workflowId}/${timestamp}_${safeName}`;
+
+    // 1. Supabase Storage にアップロード
+    const { error: storageError } = await supabase.storage
+      .from('documents')
+      .upload(storagePath, uploadFile.file, {
+        cacheControl: '3600',
+        upsert: false,
+      });
+
+    if (storageError) {
+      throw new Error(`Storage upload failed: ${storageError.message}`);
+    }
+
+    // アップロード進捗を100%に更新
+    setUploadedFiles((prev) =>
+      prev.map((f) =>
+        f.id === uploadFile.id ? { ...f, progress: 100 } : f
+      )
+    );
+
+    // 2. documents テーブルに記録
+    const documentDate = new Date().toISOString().split('T')[0];
+    const docData = {
+      client_id: clientId,
+      organization_id: organizationId || undefined,
+      workflow_id: workflowId,
+      file_name: uploadFile.file.name,
+      original_file_name: uploadFile.file.name,
+      file_path: storagePath, // Storage path を保存
+      storage_path: storagePath,
+      file_size: uploadFile.file.size,
+      file_type: uploadFile.file.type,
+      document_date: documentDate,
+      ocr_status: 'pending' as const,
+      status: 'uploaded' as const,
+      uploaded_by: user.id,
+    };
+
+    const { data: docRecord, error: dbError } = await documentsApi.create(docData);
+
+    if (dbError || !docRecord) {
+      // DBへの保存失敗 → Storage からも削除してロールバック
+      await supabase.storage.from('documents').remove([storagePath]);
+      throw new Error(`DB save failed: ${dbError}`);
+    }
+
+    return { documentId: docRecord.id, storagePath };
   };
 
-  // ファイルアップロード処理
-  const onDrop = useCallback((acceptedFiles: File[]) => {
-    const newFiles: UploadedFile[] = acceptedFiles.map((file, index) => ({
-      id: `${Date.now()}-${index}`,
-      file,
-      preview: URL.createObjectURL(file),
-      status: 'uploading',
-      progress: 0,
-    }));
+  // ============================================
+  // ファイルドロップ時の処理
+  // ============================================
+  const onDrop = useCallback(
+    (acceptedFiles: File[]) => {
+      const newFiles: UploadedFile[] = acceptedFiles.map((file, index) => ({
+        id: `${Date.now()}-${index}`,
+        file,
+        preview: URL.createObjectURL(file),
+        status: 'uploading' as const,
+        progress: 0,
+      }));
 
-    setUploadedFiles((prev) => [...prev, ...newFiles]);
+      setUploadedFiles((prev) => [...prev, ...newFiles]);
 
-    // アップロードシミュレーション
-    newFiles.forEach((uploadFile) => {
-      simulateUpload(uploadFile.id);
-    });
-  }, []);
+      // 各ファイルを順次アップロード
+      newFiles.forEach(async (uploadFile) => {
+        try {
+          // 進捗を段階的に表示（実際のアップロード中）
+          setUploadedFiles((prev) =>
+            prev.map((f) =>
+              f.id === uploadFile.id ? { ...f, progress: 30 } : f
+            )
+          );
 
+          const result = await uploadToSupabase(uploadFile);
+
+          setUploadedFiles((prev) =>
+            prev.map((f) =>
+              f.id === uploadFile.id
+                ? {
+                    ...f,
+                    status: 'success',
+                    progress: 100,
+                    documentId: result?.documentId,
+                    storagePath: result?.storagePath,
+                  }
+                : f
+            )
+          );
+        } catch (error: any) {
+          console.error('Upload error:', error);
+          setUploadedFiles((prev) =>
+            prev.map((f) =>
+              f.id === uploadFile.id
+                ? {
+                    ...f,
+                    status: 'error',
+                    progress: 0,
+                    errorMessage: error.message,
+                  }
+                : f
+            )
+          );
+        }
+      });
+    },
+    [currentWorkflow, user]
+  );
+
+  // ============================================
   // ファイル削除
-  const removeFile = (fileId: string) => {
-    setUploadedFiles((prev) => {
-      const file = prev.find((f) => f.id === fileId);
-      if (file?.preview) {
-        URL.revokeObjectURL(file.preview);
-      }
-      return prev.filter((f) => f.id !== fileId);
-    });
+  // ============================================
+  const removeFile = async (fileId: string) => {
+    const file = uploadedFiles.find((f) => f.id === fileId);
+    if (!file) return;
+
+    // Storage から削除
+    if (file.storagePath) {
+      await supabase.storage.from('documents').remove([file.storagePath]);
+    }
+
+    // documents テーブルから削除
+    if (file.documentId) {
+      await documentsApi.delete(file.documentId);
+    }
+
+    if (file.preview) {
+      URL.revokeObjectURL(file.preview);
+    }
+
+    setUploadedFiles((prev) => prev.filter((f) => f.id !== fileId));
   };
 
-  // Dropzone設定
+  // ============================================
+  // Dropzone 設定
+  // ============================================
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: {
@@ -80,7 +193,9 @@ export default function UploadPage() {
     multiple: true,
   });
 
+  // ============================================
   // 次へ進む前の検証
+  // ============================================
   const handleBeforeNext = async (): Promise<boolean> => {
     if (uploadedFiles.length === 0) {
       alert('証憑を1つ以上アップロードしてください');
@@ -101,28 +216,34 @@ export default function UploadPage() {
       if (!proceed) return false;
     }
 
-    // ワークフローデータに保存
+    // アップロード成功したドキュメントの DB ID をワークフローに保存
     const documentIds = uploadedFiles
-      .filter((f) => f.status === 'success')
-      .map((f) => f.id);
-    
+      .filter((f) => f.status === 'success' && f.documentId)
+      .map((f) => f.documentId as string);
+
     updateWorkflowData({ documents: documentIds });
 
     return true;
   };
 
-  // アップロード済みファイル数
+  // ============================================
+  // カウント
+  // ============================================
   const successCount = uploadedFiles.filter((f) => f.status === 'success').length;
   const uploadingCount = uploadedFiles.filter((f) => f.status === 'uploading').length;
   const errorCount = uploadedFiles.filter((f) => f.status === 'error').length;
 
-  // ワークフロー外からのアクセスを防ぐ
+  // ============================================
+  // ワークフロー外アクセスガード
+  // ============================================
   if (!currentWorkflow) {
     return (
       <div className="flex flex-col items-center justify-center h-full">
         <div className="text-center max-w-md">
           <AlertCircle size={64} className="text-yellow-500 mx-auto mb-4" />
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">ワークフローが開始されていません</h2>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">
+            ワークフローが開始されていません
+          </h2>
           <p className="text-gray-600 mb-6">
             証憑をアップロードするには、顧客一覧からワークフローを開始してください。
           </p>
@@ -212,9 +333,7 @@ export default function UploadPage() {
                   <p className="text-sm text-gray-500 mb-4">
                     または、クリックしてファイルを選択
                   </p>
-                  <button className="btn-primary">
-                    ファイルを選択
-                  </button>
+                  <button className="btn-primary">ファイルを選択</button>
                   <p className="text-xs text-gray-400 mt-4">
                     対応形式: PNG, JPG, PDF（最大10MB）
                   </p>
@@ -260,7 +379,6 @@ export default function UploadPage() {
                         {(file.file.size / 1024).toFixed(1)} KB
                       </p>
 
-                      {/* プログレスバー */}
                       {file.status === 'uploading' && (
                         <div className="mt-2">
                           <div className="w-full bg-gray-200 rounded-full h-2">
@@ -273,6 +391,16 @@ export default function UploadPage() {
                             アップロード中... {file.progress}%
                           </p>
                         </div>
+                      )}
+
+                      {file.status === 'error' && file.errorMessage && (
+                        <p className="text-xs text-red-500 mt-1">{file.errorMessage}</p>
+                      )}
+
+                      {file.status === 'success' && file.documentId && (
+                        <p className="text-xs text-green-600 mt-1">
+                          ID: {file.documentId.slice(0, 8)}...
+                        </p>
                       )}
                     </div>
 
@@ -288,13 +416,15 @@ export default function UploadPage() {
                         <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
                       )}
 
-                      {/* 削除ボタン */}
-                      <button
-                        onClick={() => removeFile(file.id)}
-                        className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                      >
-                        <X size={20} />
-                      </button>
+                      {/* 削除ボタン（アップロード中でない場合のみ） */}
+                      {file.status !== 'uploading' && (
+                        <button
+                          onClick={() => removeFile(file.id)}
+                          className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                        >
+                          <X size={20} />
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -304,11 +434,13 @@ export default function UploadPage() {
 
           {/* 注意事項 */}
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-            <h3 className="text-sm font-medium text-blue-900 mb-2">📌 アップロードのヒント</h3>
+            <h3 className="text-sm font-medium text-blue-900 mb-2">
+              📌 アップロードのヒント
+            </h3>
             <ul className="text-sm text-blue-800 space-y-1 list-disc list-inside">
               <li>複数ファイルを一度にアップロードできます</li>
-              <li>画像は自動的に圧縮されます</li>
-              <li>アップロード後は次のOCR処理ステップへ進みます</li>
+              <li>ファイルは Supabase Storage に安全に保存されます</li>
+              <li>アップロード後は次の OCR 処理ステップへ進みます</li>
               <li>「保存して中断」で途中保存できます</li>
             </ul>
           </div>
@@ -316,10 +448,7 @@ export default function UploadPage() {
       </div>
 
       {/* ナビゲーション */}
-      <WorkflowNavigation 
-        onBeforeNext={handleBeforeNext}
-        nextLabel="OCR処理へ"
-      />
+      <WorkflowNavigation onBeforeNext={handleBeforeNext} nextLabel="OCR処理へ" />
     </div>
   );
 }

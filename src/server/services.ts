@@ -25,26 +25,46 @@ export interface OCRResult {
 
 export async function processOCR(imagePath: string): Promise<OCRResult> {
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    // gemini-2.0-flash に変更
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
     // 画像をBase64エンコード
     const imageData = fs.readFileSync(imagePath);
     const base64Image = imageData.toString('base64');
 
+    // MIMEタイプを拡張子から推定
+    const ext = imagePath.split('.').pop()?.toLowerCase();
+    const mimeType =
+      ext === 'pdf'
+        ? 'application/pdf'
+        : ext === 'png'
+        ? 'image/png'
+        : 'image/jpeg';
+
     const prompt = `
-この画像はレシートまたは領収書です。以下の情報を正確に抽出してJSON形式で返してください：
+この画像はレシート、領収書、請求書、通帳、またはクレジットカード明細です。
+以下の情報を正確に抽出してJSON形式で返してください。
+
+【重要】通帳・クレジットカード明細など複数の取引が含まれる場合は、
+transactions 配列に各取引を個別のオブジェクトとして列挙してください。
+レシート・領収書など単一取引の場合も transactions 配列に1件として格納してください。
 
 {
-  "date": "取引日 (YYYY-MM-DD形式)",
-  "supplier": "取引先名・店舗名",
-  "total_amount": "合計金額（数値のみ）",
-  "tax_amount": "消費税額（数値のみ、記載がない場合はnull）",
-  "items": [
+  "document_type": "receipt" | "invoice" | "bank_statement" | "credit_card",
+  "transactions": [
     {
-      "name": "商品名",
-      "quantity": 数量,
-      "unit_price": 単価,
-      "amount": 金額
+      "date": "取引日 (YYYY-MM-DD形式)",
+      "supplier": "取引先名・店舗名",
+      "total_amount": "合計金額（数値のみ）",
+      "tax_amount": "消費税額（数値のみ、不明な場合はnull）",
+      "items": [
+        {
+          "name": "商品名・摘要",
+          "quantity": 数量（不明な場合はnull）,
+          "unit_price": 単価（不明な場合はnull）,
+          "amount": 金額
+        }
+      ]
     }
   ]
 }
@@ -52,7 +72,7 @@ export async function processOCR(imagePath: string): Promise<OCRResult> {
 注意事項：
 - 日付は必ず YYYY-MM-DD 形式に変換してください
 - 金額は数値のみ（カンマなし）で返してください
-- 消費税が記載されていない場合は、合計金額から逆算してください（税率10%）
+- 消費税が記載されていない場合は null にしてください（逆算不要）
 - 品目が読み取れない場合は空配列を返してください
 - JSONのみを返し、他の説明文は含めないでください
 `;
@@ -61,7 +81,7 @@ export async function processOCR(imagePath: string): Promise<OCRResult> {
       prompt,
       {
         inlineData: {
-          mimeType: 'image/jpeg',
+          mimeType: mimeType as any,
           data: base64Image,
         },
       },
@@ -76,15 +96,21 @@ export async function processOCR(imagePath: string): Promise<OCRResult> {
 
     const extracted = JSON.parse(jsonText);
 
+    // transactions 配列の最初の1件を代表値として使用（後続処理との互換性）
+    const firstTx = extracted.transactions?.[0] || {};
+
     return {
       raw_text: text,
-      extracted_date: extracted.date || null,
-      extracted_supplier: extracted.supplier || null,
-      extracted_amount: extracted.total_amount ? Number(extracted.total_amount) : null,
-      extracted_tax_amount: extracted.tax_amount ? Number(extracted.tax_amount) : null,
-      extracted_items: extracted.items || null,
+      extracted_date: firstTx.date || null,
+      extracted_supplier: firstTx.supplier || null,
+      extracted_amount: firstTx.total_amount ? Number(firstTx.total_amount) : null,
+      extracted_tax_amount: firstTx.tax_amount ? Number(firstTx.tax_amount) : null,
+      extracted_items: firstTx.items || null,
       confidence_score: 0.85, // Geminiは信頼度スコアを返さないため固定値
-    };
+      // 複数取引用に全トランザクションも保持
+      _all_transactions: extracted.transactions || [],
+      _document_type: extracted.document_type || 'receipt',
+    } as any;
   } catch (error) {
     console.error('OCR処理エラー:', error);
     throw new Error('OCR処理に失敗しました');
@@ -104,6 +130,16 @@ export interface JournalEntryInput {
   industry?: string; // 業種（ドライバー、ライバー等）
 }
 
+export interface JournalEntryLine {
+  debit_account: string;
+  debit_account_code: string;
+  credit_account: string;
+  credit_account_code: string;
+  tax_category: string;
+  amount: number;
+  description: string;
+}
+
 export interface GeneratedJournalEntry {
   category: '事業用' | 'プライベート';
   account_item: string;
@@ -112,13 +148,16 @@ export interface GeneratedJournalEntry {
   notes: string;
   confidence: number;
   reasoning: string;
+  // 複数明細対応
+  lines: JournalEntryLine[];
 }
 
 export async function generateJournalEntry(
   input: JournalEntryInput
 ): Promise<GeneratedJournalEntry> {
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    // gemini-2.0-flash に変更
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
     const prompt = `
 あなたは日本の税理士のアシスタントAIです。以下の取引情報から適切な仕訳を生成してください。
@@ -127,30 +166,45 @@ export async function generateJournalEntry(
 - 取引日: ${input.date}
 - 取引先: ${input.supplier}
 - 金額: ${input.amount}円
-- 消費税: ${input.tax_amount || '不明'}円
-- 品目: ${input.items ? input.items.map((i) => i.name).join(', ') : '不明'}
+- 消費税: ${input.tax_amount !== null ? input.tax_amount + '円' : '不明'}
+- 品目: ${input.items && input.items.length > 0 ? input.items.map((i) => `${i.name}(${i.amount}円)`).join(', ') : '不明'}
 ${input.industry ? `- 業種: ${input.industry}` : ''}
 
 【出力形式】
-以下のJSON形式で返してください：
+以下のJSON形式で返してください。
+明細が複数ある場合（品目ごとに勘定科目が異なる場合など）は、lines 配列に複数のオブジェクトを返してください。
+通常の単一取引は lines に1件のみ返してください。
+
 {
   "category": "事業用" または "プライベート",
-  "account_item": "勘定科目名（例: 燃料費、通信費、接待交際費等）",
-  "account_item_code": "勘定科目コード（3桁の数字）",
+  "account_item": "主要勘定科目名",
+  "account_item_code": "主要勘定科目コード（3桁）",
   "tax_category": "課税仕入 10%" または "対象外",
   "notes": "摘要（取引先名と品目を含める）",
   "confidence": 0.0〜1.0の信頼度,
-  "reasoning": "判断理由"
+  "reasoning": "判断理由",
+  "lines": [
+    {
+      "debit_account": "借方勘定科目名",
+      "debit_account_code": "借方コード（3桁）",
+      "credit_account": "貸方勘定科目名（通常は現金・普通預金など）",
+      "credit_account_code": "貸方コード（3桁）",
+      "tax_category": "課税仕入 10%" または "対象外",
+      "amount": 金額（数値）,
+      "description": "明細摘要"
+    }
+  ]
 }
 
 【判断基準】
 1. 取引先名や品目から事業用かプライベートか判断
 2. 業種に応じた一般的な勘定科目を選択
-   - ドライバー: ガソリン→燃料費(501)、洗車→車両費(502)
+   - ドライバー: ガソリン→燃料費(501)、洗車→車両費(502)、高速代→旅費交通費(503)
    - ライバー: 配信機材→消耗品費(503)、通信料→通信費(504)
    - フリーランス: 事務用品→消耗品費(503)、ソフトウェア→通信費(504)
 3. 消費税がある場合は「課税仕入 10%」、ない場合は「対象外」
 4. 摘要は「取引先名 - 品目」の形式
+5. 貸方は通常「現金(101)」または「普通預金(102)」を使用
 
 JSONのみを返してください。
 `;
@@ -165,6 +219,22 @@ JSONのみを返してください。
 
     const generated = JSON.parse(jsonText);
 
+    // lines が無い場合はデフォルトの1行を生成
+    const lines: JournalEntryLine[] =
+      generated.lines && generated.lines.length > 0
+        ? generated.lines
+        : [
+            {
+              debit_account: generated.account_item || '雑費',
+              debit_account_code: generated.account_item_code || '599',
+              credit_account: '現金',
+              credit_account_code: '101',
+              tax_category: generated.tax_category || '課税仕入 10%',
+              amount: input.amount,
+              description: generated.notes || input.supplier,
+            },
+          ];
+
     return {
       category: generated.category || '事業用',
       account_item: generated.account_item || '雑費',
@@ -173,11 +243,22 @@ JSONのみを返してください。
       notes: generated.notes || `${input.supplier}`,
       confidence: generated.confidence || 0.7,
       reasoning: generated.reasoning || '自動判定',
+      lines,
     };
   } catch (error) {
     console.error('仕訳生成エラー:', error);
-    
+
     // フォールバック: エラー時はデフォルト値を返す
+    const fallbackLine: JournalEntryLine = {
+      debit_account: '雑費',
+      debit_account_code: '599',
+      credit_account: '現金',
+      credit_account_code: '101',
+      tax_category: input.tax_amount ? '課税仕入 10%' : '対象外',
+      amount: input.amount,
+      description: `${input.supplier}`,
+    };
+
     return {
       category: '事業用',
       account_item: '雑費',
@@ -186,6 +267,7 @@ JSONのみを返してください。
       notes: `${input.supplier}`,
       confidence: 0.5,
       reasoning: 'AI判定失敗 - デフォルト値を使用',
+      lines: [fallbackLine],
     };
   }
 }
@@ -210,7 +292,7 @@ export async function exportToFreee(transactions: FreeeTransaction[]): Promise<{
 }> {
   // TODO: 実際のfreee API連携を実装
   console.log('freeeエクスポート（スタブ）:', transactions.length, '件');
-  
+
   return {
     success: true,
     message: 'freee連携は実装予定です',
