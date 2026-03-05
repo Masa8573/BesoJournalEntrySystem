@@ -1,6 +1,4 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import * as fs from 'fs';
-
 // Gemini APIクライアントの初期化
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
@@ -23,21 +21,30 @@ export interface OCRResult {
   confidence_score: number;
 }
 
-export async function processOCR(imagePath: string): Promise<OCRResult> {
+export async function processOCR(imageUrl: string): Promise<OCRResult> {
   try {
     // gemini-2.0-flash に変更
     const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
-    // 画像をBase64エンコード
-    const imageData = fs.readFileSync(imagePath);
-    const base64Image = imageData.toString('base64');
+    // URL から画像を取得して Base64 エンコード
+    const fetchRes = await fetch(imageUrl);
+    if (!fetchRes.ok) {
+      throw new Error(`画像の取得に失敗しました: ${fetchRes.status}`);
+    }
+    const arrayBuffer = await fetchRes.arrayBuffer();
+    // Node.js 環境では Buffer が使えるが型定義なしでも動作するよう uint8array で変換
+    const uint8 = new Uint8Array(arrayBuffer);
+    let binary = '';
+    uint8.forEach((b) => { binary += String.fromCharCode(b); });
+    const base64Image = btoa(binary);
+    const contentType = fetchRes.headers.get('content-type') || 'image/jpeg';
 
-    // MIMEタイプを拡張子から推定
-    const ext = imagePath.split('.').pop()?.toLowerCase();
+    // MIMEタイプを URL または Content-Type から推定
+    const ext = imageUrl.split('?')[0].split('.').pop()?.toLowerCase();
     const mimeType =
-      ext === 'pdf'
+      ext === 'pdf' || contentType.includes('pdf')
         ? 'application/pdf'
-        : ext === 'png'
+        : ext === 'png' || contentType.includes('png')
         ? 'image/png'
         : 'image/jpeg';
 
@@ -87,8 +94,8 @@ transactions 配列に各取引を個別のオブジェクトとして列挙し�
       },
     ]);
 
-    const response = await result.response;
-    const text = response.text();
+    const geminiRes = await result.response;
+    const text = geminiRes.text();
 
     // JSONを抽出（マークダウンコードブロックを除去）
     const jsonMatch = text.match(/```json\n([\s\S]*?)\n```/) || text.match(/\{[\s\S]*\}/);

@@ -86,20 +86,18 @@ router.post('/documents/upload', upload.single('file'), async (req: Request, res
 
 router.post('/ocr/process', async (req: Request, res: Response) => {
   try {
-    const { document_id, file_path } = req.body;
+    const { document_id, file_url, file_path } = req.body;
 
-    if (!document_id || !file_path) {
-      return res.status(400).json({ error: 'document_idとfile_pathは必須です' });
+    // file_url（Supabase署名付きURL）優先、なければ file_path
+    const targetUrl = file_url || file_path;
+
+    if (!document_id || !targetUrl) {
+      return res.status(400).json({ error: 'document_idとfile_url（またはfile_path）は必須です' });
     }
 
-    // ファイルが存在するか確認
-    if (!fs.existsSync(file_path)) {
-      return res.status(404).json({ error: 'ファイルが見つかりません' });
-    }
-
-    // OCR処理を実行
-    console.log('OCR処理開始:', file_path);
-    const ocrResult = await processOCR(file_path);
+    // OCR処理を実行（URLから直接取得）
+    console.log('OCR処理開始:', document_id);
+    const ocrResult = await processOCR(targetUrl);
 
     res.json({
       success: true,
