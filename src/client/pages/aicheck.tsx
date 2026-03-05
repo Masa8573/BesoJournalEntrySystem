@@ -78,12 +78,12 @@ export default function AiCheckPage() {
         *,
         journal_entry_lines (
           *,
-          account_item:account_items(*),
-          tax_category:tax_categories(*)
+          account_item:account_items!journal_entry_lines_account_item_id_fkey(*),
+          tax_category:tax_categories!journal_entry_lines_tax_category_id_fkey(*)
         )
       `)
       .eq('client_id', clientId)
-      .eq('status', 'draft')
+      .eq('status', 'pending')
       .order('entry_date', { ascending: false });
 
     if (error) {
@@ -93,13 +93,12 @@ export default function AiCheckPage() {
     if (entriesData) {
       // 表示用にフラット化
       const flatEntries: EntryWithLines[] = entriesData.map((entry: any) => {
-        const debitLine = entry.journal_entry_lines?.find((l: any) => l.debit_credit === 'debit')
-          ?? entry.journal_entry_lines?.[0];
+        const firstLine = entry.journal_entry_lines?.[0];
         return {
           ...entry,
-          account_item_name: debitLine?.account_item?.name,
-          tax_category_name: debitLine?.tax_category?.name,
-          amount: debitLine?.amount,
+          account_item_name: firstLine?.account_item?.name,
+          tax_category_name: firstLine?.tax_category?.name,
+          amount: firstLine?.amount,
         };
       });
       setEntries(flatEntries);
@@ -167,7 +166,7 @@ export default function AiCheckPage() {
   const handleApprove = async (id: string) => {
     await supabase
       .from('journal_entries')
-      .update({ status: 'pending' })  // reviewページで pending をフィルタ
+      .update({ status: 'approved' })
       .eq('id', id);
     await loadData();
   };
@@ -189,7 +188,7 @@ export default function AiCheckPage() {
     if (window.confirm(`${entries.length}件の仕訳を一括承認しますか？`)) {
       await supabase
         .from('journal_entries')
-        .update({ status: 'pending' })  // reviewページで pending をフィルタ
+        .update({ status: 'approved' })
         .in(
           'id',
           entries.map((e) => e.id)
