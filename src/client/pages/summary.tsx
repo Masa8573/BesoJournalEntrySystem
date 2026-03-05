@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Plus, Upload, FileOutput, FileX, ArrowLeft, Building2, Receipt, Calendar, CheckCircle, Clock, AlertCircle } from 'lucide-react';
 import { supabase } from '@/client/lib/supabase';
+import { useWorkflow } from '@/client/context/WorkflowContext';
 import type { Client, Industry } from '@/types';
 
 interface WorkflowLog {
@@ -33,6 +34,7 @@ function formatSales(amount: number | null): string {
 export default function SummaryPage() {
   const { id: clientId } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { startWorkflow } = useWorkflow();
   const [client, setClient] = useState<ClientDetail | null>(null);
   const [workflows, setWorkflows] = useState<WorkflowLog[]>([]);
   const [loading, setLoading] = useState(true);
@@ -101,7 +103,7 @@ export default function SummaryPage() {
           <p className="text-sm text-gray-500 mt-0.5">顧客詳細・業務ログ</p>
         </div>
         <button
-          onClick={() => navigate(`/upload?client_id=${clientId}`)}
+          onClick={() => client && clientId && startWorkflow(clientId, client.name)}
           className="flex items-center gap-2 btn-primary"
         >
           <Plus size={18} />新規ワークフロー開始
@@ -149,10 +151,19 @@ export default function SummaryPage() {
 
       {/* クイックアクション */}
       <div className="grid grid-cols-3 gap-4">
+        <button
+          onClick={() => client && clientId && startWorkflow(clientId, client.name)}
+          className="flex items-center gap-3 p-4 rounded-lg border transition-colors text-blue-600 bg-blue-50 hover:bg-blue-100 border-blue-200"
+        >
+          <Upload size={20} />
+          <div className="text-left">
+            <p className="text-sm font-semibold">新規フロー開始</p>
+            <p className="text-xs opacity-75">証憑をアップロード</p>
+          </div>
+        </button>
         {[
-          { icon: <Upload size={20} />, label: 'アップロード', desc: '証憑をアップロード', href: `/upload?client_id=${clientId}`, color: 'text-blue-600 bg-blue-50 hover:bg-blue-100 border-blue-200' },
-          { icon: <FileOutput size={20} />, label: 'エクスポート', desc: 'freeeに出力', href: `/export?client_id=${clientId}`, color: 'text-green-600 bg-green-50 hover:bg-green-100 border-green-200' },
-          { icon: <FileX size={20} />, label: '対象外証憑', desc: '除外された証憑', href: `/excluded?client_id=${clientId}`, color: 'text-red-600 bg-red-50 hover:bg-red-100 border-red-200' },
+          { icon: <FileOutput size={20} />, label: 'エクスポート', desc: 'freeeに出力', href: `/clients/${clientId}/export`, color: 'text-green-600 bg-green-50 hover:bg-green-100 border-green-200' },
+          { icon: <FileX size={20} />, label: '対象外証憑', desc: '除外された証憑', href: `/clients/${clientId}/excluded`, color: 'text-red-600 bg-red-50 hover:bg-red-100 border-red-200' },
         ].map(item => (
           <Link
             key={item.label}
@@ -180,7 +191,7 @@ export default function SummaryPage() {
             <Calendar size={40} className="mx-auto mb-3 text-gray-300" />
             <p className="text-sm">まだ処理履歴がありません</p>
             <button
-              onClick={() => navigate(`/upload?client_id=${clientId}`)}
+              onClick={() => client && clientId && startWorkflow(clientId, client.name)}
               className="mt-4 btn-primary text-sm"
             >
               最初のワークフローを開始する
