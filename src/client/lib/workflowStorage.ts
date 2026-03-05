@@ -56,23 +56,6 @@ export const workflowsApi = {
 
   /** 新規作成 */
   create: async (clientId: string, clientName: string): Promise<WorkflowState | null> => {
-    // organization_id を取得（RLS の WITH CHECK に必要）
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      console.error('Failed to create workflow: not authenticated');
-      return null;
-    }
-    const { data: userRow, error: userError } = await supabase
-      .from('users')
-      .select('organization_id')
-      .eq('id', user.id)
-      .single();
-    if (userError || !userRow?.organization_id) {
-      console.error('Failed to get organization_id:', userError);
-      return null;
-    }
-    const organizationId = userRow.organization_id;
-
     // 既存の進行中ワークフローをキャンセル
     await supabase
       .from('workflows')
@@ -83,7 +66,6 @@ export const workflowsApi = {
     const { data, error } = await supabase
       .from('workflows')
       .insert({
-        organization_id: organizationId,
         client_id: clientId,
         current_step: 1,
         completed_steps: [],
@@ -174,12 +156,13 @@ export function getStepName(step: number): string {
 // 新URL構造: /clients/:id/upload 等
 // ============================================
 export function getStepPath(step: number, clientId?: string): string {
-  if (!clientId || step <= 1) {
+  if (!clientId) {
     return '/clients';
   }
 
+  // step 1 = アップロード（ワークフロー開始直後は必ずuploadへ）
   const stepSlugs: Record<number, string> = {
-    1: '',          // step 1 は顧客選択 = /clients
+    1: 'upload',
     2: 'upload',
     3: 'ocr',
     4: 'aicheck',

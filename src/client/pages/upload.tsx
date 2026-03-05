@@ -46,8 +46,8 @@ export default function UploadPage() {
     const timestamp = Date.now();
     const safeName = uploadFile.file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
     const storagePath = organizationId
-      ? `documents/${organizationId}/${clientId}/${workflowId}/${timestamp}_${safeName}`
-      : `documents/${clientId}/${workflowId}/${timestamp}_${safeName}`;
+      ? `${organizationId}/${clientId}/${workflowId}/${timestamp}_${safeName}`
+      : `${clientId}/${workflowId}/${timestamp}_${safeName}`;
 
     // 1. Supabase Storage にアップロード
     const { error: storageError } = await supabase.storage
