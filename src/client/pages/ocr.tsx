@@ -156,7 +156,7 @@ export default function OCRPage() {
         const journalEntry = journalData.journal_entry;
 
         // -----------------------------------------------
-        // STEP 5: 仕訳を journal_entries テーブルに保存
+        // STEP 5: 仕訳を journal_entries + lines テーブルに保存
         // -----------------------------------------------
         // organization_id を取得（RLSポリシー必須）
         const { data: { user: authUser } } = await supabase.auth.getUser();
@@ -166,13 +166,15 @@ export default function OCRPage() {
           .eq('id', authUser!.id)
           .single();
 
+        // ヘッダー保存
         const { data: savedEntry, error: dbSaveError } = await supabase
           .from('journal_entries')
           .insert({
             organization_id: userRow!.organization_id,
             client_id: currentWorkflow!.clientId,
+            workflow_id: currentWorkflow!.id,
             document_id: result.documentId,
-            entry_date: journalEntry.entry_date || ocrResult.extracted_date,
+            entry_date: journalEntry.entry_date || ocrResult.extracted_date || new Date().toISOString().split('T')[0],
             entry_type: 'normal',
             description: journalEntry.notes,
             status: 'pending',
@@ -184,7 +186,64 @@ export default function OCRPage() {
 
         if (dbSaveError) {
           console.error('仕訳保存エラー:', dbSaveError);
-          // 仕訳保存失敗でもOCR完了として処理続行
+        }
+
+        // 明細行（lines）を保存
+        if (savedEntry?.id && journalEntry.lines?.length > 0) {
+          // AIが返した勘定科目コード/名称 → UUID に変換
+          for (let lineIdx = 0; lineIdx < journalEntry.lines.length; lineIdx++) {
+            const line = journalEntry.lines[lineIdx];
+
+            // 借方勘定科目 UUID を検索（code または name で）
+            const { data: debitAccountRows } = await supabase
+              .from('account_items')
+              .select('id, name, code')
+              .or(`code.eq.${line.debit_account_code},name.eq.${line.debit_account}`)
+              .limit(1);
+            const debitAccountId = debitAccountRows?.[0]?.id || null;
+
+            // 貸方勘定科目 UUID を検索
+            const { data: creditAccountRows } = await supabase
+              .from('account_items')
+              .select('id, name, code')
+              .or(`code.eq.${line.credit_account_code},name.eq.${line.credit_account}`)
+              .limit(1);
+            const creditAccountId = creditAccountRows?.[0]?.id || null;
+
+            // 税区分 UUID を検索（name または display_name で）
+            const { data: taxCatRows } = await supabase
+              .from('tax_categories')
+              .select('id, name, display_name')
+              .or(`name.eq.${line.tax_category},display_name.eq.${line.tax_category}`)
+              .limit(1);
+            const taxCategoryId = taxCatRows?.[0]?.id || null;
+
+            // 借方行を保存
+            if (debitAccountId) {
+              await supabase.from('journal_entry_lines').insert({
+                journal_entry_id: savedEntry.id,
+                line_number: lineIdx * 2 + 1,
+                debit_credit: 'debit',
+                account_item_id: debitAccountId,
+                tax_category_id: taxCategoryId,
+                amount: line.amount || ocrResult.extracted_amount || 0,
+                description: line.description || journalEntry.notes,
+              });
+            }
+
+            // 貸方行を保存
+            if (creditAccountId) {
+              await supabase.from('journal_entry_lines').insert({
+                journal_entry_id: savedEntry.id,
+                line_number: lineIdx * 2 + 2,
+                debit_credit: 'credit',
+                account_item_id: creditAccountId,
+                tax_category_id: null,
+                amount: line.amount || ocrResult.extracted_amount || 0,
+                description: line.description || journalEntry.notes,
+              });
+            }
+          }
         }
 
         // documents ステータスを ai_processing → reviewed に更新

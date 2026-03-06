@@ -23,7 +23,6 @@ export interface OCRResult {
 
 export async function processOCR(imageUrl: string): Promise<OCRResult> {
   try {
-    // gemini-2.5-pro に変更
     const model = genAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
 
     // URL から画像を取得して Base64 エンコード
@@ -163,7 +162,6 @@ export async function generateJournalEntry(
   input: JournalEntryInput
 ): Promise<GeneratedJournalEntry> {
   try {
-    // gemini-2.5-pro に変更
     const model = genAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
 
     const prompt = `
