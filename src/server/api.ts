@@ -19,37 +19,64 @@ const router = express.Router();
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
-// 起動時に接続情報をログ出力（キーは先頭のみ表示）
-console.log('🔧 Supabase サーバー接続情報:');
-console.log(`   URL: ${supabaseUrl || '❌ 未設定'}`);
-console.log(`   SERVICE_ROLE_KEY: ${supabaseServiceKey ? supabaseServiceKey.substring(0, 20) + '...' : '❌ 未設定'}`);
-console.log(`   SUPABASE_URL env: ${process.env.SUPABASE_URL ? '✅' : '❌'}`);
-console.log(`   VITE_SUPABASE_URL env: ${process.env.VITE_SUPABASE_URL ? '✅' : '❌'}`);
-console.log(`   SUPABASE_SERVICE_ROLE_KEY env: ${process.env.SUPABASE_SERVICE_ROLE_KEY ? '✅' : '❌'}`);
+// 起動時の環境変数診断ログ
+console.log('=== Supabase 環境変数診断 ===');
+console.log(`  SUPABASE_URL:              ${supabaseUrl ? `${supabaseUrl.substring(0, 30)}...` : '❌ 未設定'}`);
+console.log(`  VITE_SUPABASE_URL:         ${process.env.VITE_SUPABASE_URL ? '✅ 設定済み' : '（未設定 - フォールバック対象）'}`);
+console.log(`  SUPABASE_SERVICE_ROLE_KEY:  ${supabaseServiceKey ? `✅ 設定済み (${supabaseServiceKey.substring(0, 20)}...)` : '❌ 未設定'}`);
+console.log('============================');
 
-const supabaseAdmin = supabaseUrl && supabaseServiceKey
-  ? createClient(supabaseUrl, supabaseServiceKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    })
-  : null;
-
-if (!supabaseAdmin) {
-  console.error('⚠️ Supabase Admin クライアントが初期化できません。環境変数を確認してください。');
+if (!supabaseUrl) {
+  console.error('⚠️  SUPABASE_URL も VITE_SUPABASE_URL も設定されていません。マスタ取得が全て失敗します。');
+}
+if (!supabaseServiceKey) {
+  console.error('⚠️  SUPABASE_SERVICE_ROLE_KEY が設定されていません。RLS バイパスできず、全クエリが失敗します。');
 }
 
+const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+  auth: { autoRefreshToken: false, persistSession: false },
+});
+
 // ============================================
-// マスタデータ取得ヘルパー
+// マスタデータ取得ヘルパー（全てエラーログ付き）
 // ============================================
 
-async function fetchAccountItems(organizationId: string): Promise<AccountItemRef[]> {
-  if (!supabaseAdmin) {
-    console.error('[fetchAccountItems] supabaseAdmin が null です');
-    return [];
+/** client_id → organization_id を解決 */
+async function getOrganizationId(clientId: string): Promise<string | null> {
+  console.log(`[getOrganizationId] client_id="${clientId}" で clients テーブルを検索中...`);
+
+  const { data, error, status, statusText } = await supabaseAdmin
+    .from('clients')
+    .select('organization_id')
+    .eq('id', clientId)
+    .single();
+
+  if (error) {
+    console.error(`[getOrganizationId] ❌ Supabase エラー:`, {
+      message: error.message,
+      code: error.code,
+      details: error.details,
+      hint: error.hint,
+      httpStatus: status,
+      httpStatusText: statusText,
+    });
+    return null;
   }
 
-  console.log(`[fetchAccountItems] organization_id=${organizationId} で取得開始`);
+  if (!data) {
+    console.warn(`[getOrganizationId] ⚠️ client_id="${clientId}" のレコードが見つかりません (data=null)`);
+    return null;
+  }
 
-  const { data, error } = await supabaseAdmin
+  console.log(`[getOrganizationId] ✅ organization_id="${data.organization_id}"`);
+  return data.organization_id || null;
+}
+
+/** organization_id に属する勘定科目を取得 */
+async function fetchAccountItems(organizationId: string): Promise<AccountItemRef[]> {
+  console.log(`[fetchAccountItems] organization_id="${organizationId}" で勘定科目を取得中...`);
+
+  const { data, error, status } = await supabaseAdmin
     .from('account_items')
     .select('id, code, name, category:account_categories(name)')
     .eq('organization_id', organizationId)
@@ -57,50 +84,61 @@ async function fetchAccountItems(organizationId: string): Promise<AccountItemRef
     .order('code', { ascending: true });
 
   if (error) {
-    console.error('[fetchAccountItems] エラー:', JSON.stringify(error));
+    console.error(`[fetchAccountItems] ❌ Supabase エラー:`, {
+      message: error.message,
+      code: error.code,
+      details: error.details,
+      hint: error.hint,
+      httpStatus: status,
+    });
     return [];
   }
 
-  console.log(`[fetchAccountItems] ${(data || []).length} 件取得`);
-
-  return (data || []).map((item: any) => ({
+  const items = (data || []).map((item: any) => ({
     id: item.id,
     code: item.code || '',
     name: item.name,
     category: item.category?.name || 'expense',
   }));
+
+  console.log(`[fetchAccountItems] ✅ ${items.length}件の勘定科目を取得`);
+  return items;
 }
 
+/** 税区分を取得（システム共通マスタ） */
 async function fetchTaxCategories(): Promise<TaxCategoryRef[]> {
-  if (!supabaseAdmin) {
-    console.error('[fetchTaxCategories] supabaseAdmin が null です');
-    return [];
-  }
+  console.log(`[fetchTaxCategories] 税区分マスタを取得中...`);
 
-  const { data, error } = await supabaseAdmin
+  const { data, error, status } = await supabaseAdmin
     .from('tax_categories')
     .select('id, code, name, rate')
     .eq('is_active', true)
     .order('code', { ascending: true });
 
   if (error) {
-    console.error('[fetchTaxCategories] エラー:', JSON.stringify(error));
+    console.error(`[fetchTaxCategories] ❌ Supabase エラー:`, {
+      message: error.message,
+      code: error.code,
+      details: error.details,
+      hint: error.hint,
+      httpStatus: status,
+    });
     return [];
   }
 
-  console.log(`[fetchTaxCategories] ${(data || []).length} 件取得`);
-
-  return (data || []).map((item: any) => ({
+  const categories = (data || []).map((item: any) => ({
     id: item.id,
     code: item.code || '',
     name: item.name,
     rate: Number(item.rate) || 0,
   }));
+
+  console.log(`[fetchTaxCategories] ✅ ${categories.length}件の税区分を取得`);
+  return categories;
 }
 
+/** 「雑費」のフォールバック用 UUID を取得 */
 async function findFallbackAccountId(organizationId: string): Promise<string> {
-  if (!supabaseAdmin) return '';
-
   const { data, error } = await supabaseAdmin
     .from('account_items')
     .select('id')
@@ -110,38 +148,12 @@ async function findFallbackAccountId(organizationId: string): Promise<string> {
     .single();
 
   if (error) {
-    console.warn('[findFallbackAccountId] 雑費が見つかりません:', JSON.stringify(error));
+    console.warn(`[findFallbackAccountId] 「雑費」が見つかりません:`, error.message);
+    return '';
   }
 
+  console.log(`[findFallbackAccountId] ✅ 雑費 ID="${data?.id}"`);
   return data?.id || '';
-}
-
-async function getOrganizationId(clientId: string): Promise<string | null> {
-  if (!supabaseAdmin) {
-    console.error('[getOrganizationId] supabaseAdmin が null です');
-    return null;
-  }
-
-  console.log(`[getOrganizationId] client_id=${clientId} で検索開始`);
-
-  const { data, error } = await supabaseAdmin
-    .from('clients')
-    .select('organization_id')
-    .eq('id', clientId)
-    .single();
-
-  if (error) {
-    console.error('[getOrganizationId] Supabase エラー:', JSON.stringify(error));
-    return null;
-  }
-
-  if (!data) {
-    console.error(`[getOrganizationId] client_id=${clientId} のデータが見つかりません（data=null）`);
-    return null;
-  }
-
-  console.log(`[getOrganizationId] → organization_id=${data.organization_id}`);
-  return data.organization_id || null;
 }
 
 // ============================================
@@ -152,6 +164,7 @@ if (!fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 
+// Multer設定
 const multerStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, UPLOAD_DIR);
@@ -169,7 +182,6 @@ const upload = multer({
     const allowedTypes = /jpeg|jpg|png|webp|pdf/;
     const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
     const mimetype = allowedTypes.test(file.mimetype);
-
     if (mimetype && extname) {
       return cb(null, true);
     } else {
@@ -187,13 +199,10 @@ router.post('/documents/upload', upload.single('file'), async (req: Request, res
     if (!req.file) {
       return res.status(400).json({ error: 'ファイルがアップロードされていません' });
     }
-
     const { client_id, uploaded_by } = req.body;
-
     if (!client_id || !uploaded_by) {
       return res.status(400).json({ error: 'client_idとuploaded_byは必須です' });
     }
-
     const document = {
       id: `doc-${Date.now()}`,
       client_id,
@@ -206,12 +215,7 @@ router.post('/documents/upload', upload.single('file'), async (req: Request, res
       ocr_status: 'pending',
       created_at: new Date().toISOString(),
     };
-
-    res.json({
-      success: true,
-      message: 'ファイルがアップロードされました',
-      document,
-    });
+    res.json({ success: true, message: 'ファイルがアップロードされました', document });
   } catch (error: any) {
     console.error('アップロードエラー:', error);
     res.status(500).json({ error: error.message });
@@ -225,21 +229,14 @@ router.post('/documents/upload', upload.single('file'), async (req: Request, res
 router.post('/ocr/process', async (req: Request, res: Response) => {
   try {
     const { document_id, file_url, file_path } = req.body;
-
     const targetUrl = file_url || file_path;
-
     if (!document_id || !targetUrl) {
       return res.status(400).json({ error: 'document_idとfile_url（またはfile_path）は必須です' });
     }
 
-    console.log('OCR処理開始:', document_id);
+    console.log(`[OCR] 処理開始: document_id="${document_id}"`);
     const ocrResult = await processOCR(targetUrl);
-    console.log('OCR処理完了:', {
-      document_id,
-      supplier: ocrResult.extracted_supplier,
-      amount: ocrResult.extracted_amount,
-      confidence: ocrResult.confidence_score,
-    });
+    console.log(`[OCR] ✅ 完了: supplier="${ocrResult.extracted_supplier}", amount=${ocrResult.extracted_amount}, confidence=${ocrResult.confidence_score}`);
 
     res.json({
       success: true,
@@ -252,7 +249,7 @@ router.post('/ocr/process', async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    console.error('OCR処理エラー:', error.message, error.stack);
+    console.error('[OCR] ❌ エラー:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
@@ -265,85 +262,45 @@ router.post('/journal-entries/generate', async (req: Request, res: Response) => 
   try {
     const { document_id, client_id, ocr_result, industry } = req.body;
 
-    console.log('=== 仕訳生成リクエスト受信 ===');
-    console.log('  document_id:', document_id);
-    console.log('  client_id:', client_id);
-    console.log('  industry:', industry);
-    console.log('  ocr_result存在:', !!ocr_result);
-    console.log('  ocr_result.extracted_supplier:', ocr_result?.extracted_supplier);
-    console.log('  ocr_result.extracted_amount:', ocr_result?.extracted_amount);
+    console.log(`[仕訳生成] リクエスト受信: document_id="${document_id}", client_id="${client_id}"`);
 
     if (!document_id || !client_id || !ocr_result) {
-      console.error('=== 必須パラメータ不足 ===');
-      console.error('  document_id:', !!document_id);
-      console.error('  client_id:', !!client_id);
-      console.error('  ocr_result:', !!ocr_result);
+      console.error('[仕訳生成] ❌ 必須パラメータ不足:', {
+        document_id: !!document_id,
+        client_id: !!client_id,
+        ocr_result: !!ocr_result,
+      });
       return res.status(400).json({ error: '必須パラメータが不足しています' });
     }
 
-    // -----------------------------------------------
-    // 1. Supabase接続チェック
-    // -----------------------------------------------
-    if (!supabaseAdmin) {
-      console.error('=== supabaseAdmin が未初期化 ===');
-      console.error('  SUPABASE_URL:', supabaseUrl || '未設定');
-      console.error('  SERVICE_ROLE_KEY:', supabaseServiceKey ? '設定済み' : '未設定');
-      return res.status(500).json({
-        error: 'サーバーのSupabase接続が設定されていません。環境変数 SUPABASE_URL と SUPABASE_SERVICE_ROLE_KEY を確認してください。',
-      });
-    }
-
-    // -----------------------------------------------
-    // 2. organization_id を解決
-    // -----------------------------------------------
+    // 1. organization_id を解決
     const organizationId = await getOrganizationId(client_id);
     if (!organizationId) {
-      console.error('=== organization_id 解決失敗 ===');
-      console.error('  client_id:', client_id);
-
-      // 追加診断: clients テーブルの全件数を確認
-      const { count, error: countErr } = await supabaseAdmin
-        .from('clients')
-        .select('*', { count: 'exact', head: true });
-      console.error('  clients テーブル総件数:', count, '  エラー:', countErr ? JSON.stringify(countErr) : 'なし');
-
+      console.error(`[仕訳生成] ❌ organization_id 解決失敗。client_id="${client_id}"`);
       return res.status(400).json({
         error: '指定された client_id に紐づく組織が見つかりません',
         debug: {
           client_id,
           supabase_url_set: !!supabaseUrl,
           service_key_set: !!supabaseServiceKey,
-          clients_count: count,
-          clients_count_error: countErr?.message || null,
         },
       });
     }
 
-    console.log('  organization_id:', organizationId);
-
-    // -----------------------------------------------
-    // 3. マスタデータを取得
-    // -----------------------------------------------
+    // 2. マスタデータを取得
+    console.log(`[仕訳生成] マスタデータ取得中... organization_id="${organizationId}"`);
     const [accountItems, taxCategories, fallbackAccountId] = await Promise.all([
       fetchAccountItems(organizationId),
       fetchTaxCategories(),
       findFallbackAccountId(organizationId),
     ]);
+    console.log(`[仕訳生成] マスタ: 勘定科目=${accountItems.length}件, 税区分=${taxCategories.length}件, 雑費ID="${fallbackAccountId}"`);
 
-    console.log('  勘定科目:', accountItems.length, '件');
-    console.log('  税区分:', taxCategories.length, '件');
-    console.log('  雑費ID:', fallbackAccountId || 'なし');
-
-    if (accountItems.length === 0) {
-      console.warn('⚠️ 勘定科目マスタが0件です。デフォルト仕訳のみ返します。');
-    }
-
-    // -----------------------------------------------
-    // 4. AI仕訳生成
-    // -----------------------------------------------
-    console.log('仕訳生成開始:', {
+    // 3. AI仕訳生成
+    console.log('[仕訳生成] Gemini AI 呼び出し中...', {
       supplier: ocr_result.extracted_supplier,
       amount: ocr_result.extracted_amount,
+      industry,
     });
 
     const journalEntry = await generateJournalEntry({
@@ -360,27 +317,18 @@ router.post('/journal-entries/generate', async (req: Request, res: Response) => 
       tax_categories: taxCategories,
     });
 
-    console.log('仕訳生成完了:', {
-      category: journalEntry.category,
-      confidence: journalEntry.confidence,
-      lines_count: journalEntry.lines.length,
-    });
+    console.log(`[仕訳生成] ✅ AI完了: category="${journalEntry.category}", lines=${journalEntry.lines.length}件, confidence=${journalEntry.confidence}`);
 
-    // -----------------------------------------------
-    // 5. AI出力の勘定科目名・税区分名 → DB UUID にマッピング
-    // -----------------------------------------------
+    // 4. UUID マッピング
     const mappedLines = mapLinesToDBFormat(
       journalEntry.lines,
       accountItems,
       taxCategories,
       fallbackAccountId
     );
+    console.log(`[仕訳生成] ✅ UUIDマッピング完了: ${mappedLines.length}件`);
 
-    console.log('マッピング完了:', mappedLines.length, '行');
-
-    // -----------------------------------------------
-    // 6. レスポンス
-    // -----------------------------------------------
+    // 5. レスポンス
     const entry = {
       document_id,
       client_id,
@@ -393,17 +341,13 @@ router.post('/journal-entries/generate', async (req: Request, res: Response) => 
       _raw_lines: journalEntry.lines,
     };
 
-    console.log('=== 仕訳生成レスポンス送信 ===');
-
     res.json({
       success: true,
       message: '仕訳が生成されました',
       journal_entry: entry,
     });
   } catch (error: any) {
-    console.error('=== 仕訳生成エラー ===');
-    console.error('  message:', error.message);
-    console.error('  stack:', error.stack);
+    console.error('[仕訳生成] ❌ 予期しないエラー:', error.message, error.stack);
     res.status(500).json({ error: error.message });
   }
 });
@@ -415,11 +359,9 @@ router.post('/journal-entries/generate', async (req: Request, res: Response) => 
 router.post('/freee/export', async (req: Request, res: Response) => {
   try {
     const { journal_entries } = req.body;
-
     if (!journal_entries || !Array.isArray(journal_entries)) {
       return res.status(400).json({ error: 'journal_entriesは配列である必要があります' });
     }
-
     const transactions = journal_entries.map((entry: any) => ({
       issue_date: entry.entry_date,
       type: 'expense' as 'income' | 'expense',
@@ -428,14 +370,8 @@ router.post('/freee/export', async (req: Request, res: Response) => {
       account_item_id: 0,
       tax_code: 0,
     }));
-
     const result = await exportToFreee(transactions);
-
-    res.json({
-      success: result.success,
-      message: result.message,
-      exported_count: result.exported_count,
-    });
+    res.json({ success: result.success, message: result.message, exported_count: result.exported_count });
   } catch (error: any) {
     console.error('freeeエクスポートエラー:', error);
     res.status(500).json({ error: error.message });
@@ -449,24 +385,22 @@ router.post('/freee/export', async (req: Request, res: Response) => {
 router.post('/process/batch', upload.array('files', 500), async (req: Request, res: Response) => {
   try {
     const files = req.files as Express.Multer.File[];
-
     if (!files || files.length === 0) {
       return res.status(400).json({ error: 'ファイルがアップロードされていません' });
     }
-
     const { client_id, uploaded_by, industry } = req.body;
-
     if (!client_id || !uploaded_by) {
       return res.status(400).json({ error: 'client_idとuploaded_byは必須です' });
     }
 
-    if (!supabaseAdmin) {
-      return res.status(500).json({ error: 'Supabase接続が未設定です' });
-    }
+    console.log(`[バッチ] 処理開始: ${files.length}件, client_id="${client_id}"`);
 
     const organizationId = await getOrganizationId(client_id);
     if (!organizationId) {
-      return res.status(400).json({ error: '指定された client_id に紐づく組織が見つかりません' });
+      return res.status(400).json({
+        error: '指定された client_id に紐づく組織が見つかりません',
+        debug: { client_id, supabase_url_set: !!supabaseUrl, service_key_set: !!supabaseServiceKey },
+      });
     }
 
     const [accountItems, taxCategories, fallbackAccountId] = await Promise.all([
@@ -476,13 +410,10 @@ router.post('/process/batch', upload.array('files', 500), async (req: Request, r
     ]);
 
     const results = [];
-
     for (const file of files) {
       try {
-        console.log(`バッチ処理中: ${file.originalname}`);
-
+        console.log(`[バッチ] 処理中: ${file.originalname}`);
         const ocrResult = await processOCR(file.path);
-
         const journalEntry = await generateJournalEntry({
           date: ocrResult.extracted_date || new Date().toISOString().split('T')[0],
           supplier: ocrResult.extracted_supplier || '不明',
@@ -496,104 +427,85 @@ router.post('/process/batch', upload.array('files', 500), async (req: Request, r
           account_items: accountItems,
           tax_categories: taxCategories,
         });
-
-        const mappedLines = mapLinesToDBFormat(
-          journalEntry.lines,
-          accountItems,
-          taxCategories,
-          fallbackAccountId
-        );
-
+        const mappedLines = mapLinesToDBFormat(journalEntry.lines, accountItems, taxCategories, fallbackAccountId);
         results.push({
           file_name: file.originalname,
           success: true,
           ocr: ocrResult,
-          journal_entry: {
-            entry_date: ocrResult.extracted_date,
-            category: journalEntry.category,
-            notes: journalEntry.notes,
-            confidence: journalEntry.confidence,
-            reasoning: journalEntry.reasoning,
-            lines: mappedLines,
-          },
+          journal_entry: { entry_date: ocrResult.extracted_date, category: journalEntry.category, notes: journalEntry.notes, confidence: journalEntry.confidence, reasoning: journalEntry.reasoning, lines: mappedLines },
         });
-
-        console.log(`バッチ完了: ${file.originalname}`);
+        console.log(`[バッチ] ✅ 完了: ${file.originalname}`);
       } catch (error: any) {
-        console.error(`バッチエラー (${file.originalname}):`, error.message);
-        results.push({
-          file_name: file.originalname,
-          success: false,
-          error: error.message,
-        });
+        console.error(`[バッチ] ❌ エラー (${file.originalname}):`, error.message);
+        results.push({ file_name: file.originalname, success: false, error: error.message });
       }
     }
 
     const successCount = results.filter((r) => r.success).length;
     const failureCount = results.filter((r) => !r.success).length;
+    console.log(`[バッチ] 完了: 成功=${successCount}, 失敗=${failureCount}`);
 
-    res.json({
-      success: true,
-      message: `${successCount}件処理完了、${failureCount}件失敗`,
-      total: files.length,
-      success_count: successCount,
-      failure_count: failureCount,
-      results,
-    });
+    res.json({ success: true, message: `${successCount}件処理完了、${failureCount}件失敗`, total: files.length, success_count: successCount, failure_count: failureCount, results });
   } catch (error: any) {
-    console.error('バッチ処理エラー:', error.message, error.stack);
+    console.error('[バッチ] ❌ エラー:', error.message, error.stack);
     res.status(500).json({ error: error.message });
   }
 });
 
 // ============================================
-// ヘルスチェックAPI（診断情報付き）
+// ヘルスチェックAPI（Supabase 接続テスト付き）
 // ============================================
 
 router.get('/health', async (req: Request, res: Response) => {
-  let supabaseStatus = 'not_configured';
-  let clientsCount: number | null = null;
-  let supabaseError: string | null = null;
+  let supabaseConnected = false;
+  let supabaseTestError: string | null = null;
+  let testRowCount: number | null = null;
 
-  if (supabaseAdmin) {
-    try {
-      const { count, error } = await supabaseAdmin
-        .from('clients')
-        .select('*', { count: 'exact', head: true });
+  try {
+    const { data, error, count } = await supabaseAdmin
+      .from('organizations')
+      .select('id', { count: 'exact' })
+      .limit(1);
 
-      if (error) {
-        supabaseStatus = 'error';
-        supabaseError = error.message;
-      } else {
-        supabaseStatus = 'connected';
-        clientsCount = count;
-      }
-    } catch (e: any) {
-      supabaseStatus = 'exception';
-      supabaseError = e.message;
+    if (error) {
+      supabaseTestError = `${error.code}: ${error.message}`;
+    } else {
+      supabaseConnected = true;
+      testRowCount = count;
     }
+  } catch (e: any) {
+    supabaseTestError = e.message;
   }
 
   res.json({
     status: 'ok',
     message: 'APIサーバーは正常に動作しています',
     timestamp: new Date().toISOString(),
-    gemini_configured: !!process.env.GEMINI_API_KEY,
-    gemini_model: process.env.GEMINI_MODEL || 'gemini-3.1-pro-preview',
+    gemini: {
+      configured: !!process.env.GEMINI_API_KEY,
+      model: process.env.GEMINI_MODEL || 'gemini-3.1-pro-preview',
+    },
     supabase: {
       url_set: !!supabaseUrl,
       service_key_set: !!supabaseServiceKey,
-      admin_initialized: !!supabaseAdmin,
-      connection_status: supabaseStatus,
-      clients_count: clientsCount,
-      error: supabaseError,
+      connected: supabaseConnected,
+      organizations_count: testRowCount,
+      error: supabaseTestError,
     },
-    env_vars: {
-      SUPABASE_URL: process.env.SUPABASE_URL ? '✅' : '❌',
+    env_check: {
+      SUPABASE_URL: supabaseUrl ? '✅' : '❌',
       VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL ? '✅' : '❌',
-      SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY ? '✅' : '❌',
+      SUPABASE_SERVICE_ROLE_KEY: supabaseServiceKey ? '✅' : '❌',
       GEMINI_API_KEY: process.env.GEMINI_API_KEY ? '✅' : '❌',
-      GEMINI_MODEL: process.env.GEMINI_MODEL || '(default: gemini-3.1-pro-preview)',
+    },
+    // デバッグ用（原因特定後に削除すること）
+    _debug_key_fingerprint: {
+      service_key_first10: supabaseServiceKey ? supabaseServiceKey.substring(0, 10) : 'EMPTY',
+      service_key_last5: supabaseServiceKey ? supabaseServiceKey.substring(supabaseServiceKey.length - 5) : 'EMPTY',
+      service_key_length: supabaseServiceKey.length,
+      anon_key_first10: (process.env.VITE_SUPABASE_ANON_KEY || '').substring(0, 10) || 'NOT_SET',
+      keys_are_different: supabaseServiceKey !== (process.env.VITE_SUPABASE_ANON_KEY || ''),
+      url_value: supabaseUrl,
     },
   });
 });
