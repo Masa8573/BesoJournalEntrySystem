@@ -19,16 +19,36 @@ const router = express.Router();
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
-const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
-  auth: { autoRefreshToken: false, persistSession: false },
-});
+// 起動時に接続情報をログ出力（キーは先頭のみ表示）
+console.log('🔧 Supabase サーバー接続情報:');
+console.log(`   URL: ${supabaseUrl || '❌ 未設定'}`);
+console.log(`   SERVICE_ROLE_KEY: ${supabaseServiceKey ? supabaseServiceKey.substring(0, 20) + '...' : '❌ 未設定'}`);
+console.log(`   SUPABASE_URL env: ${process.env.SUPABASE_URL ? '✅' : '❌'}`);
+console.log(`   VITE_SUPABASE_URL env: ${process.env.VITE_SUPABASE_URL ? '✅' : '❌'}`);
+console.log(`   SUPABASE_SERVICE_ROLE_KEY env: ${process.env.SUPABASE_SERVICE_ROLE_KEY ? '✅' : '❌'}`);
+
+const supabaseAdmin = supabaseUrl && supabaseServiceKey
+  ? createClient(supabaseUrl, supabaseServiceKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    })
+  : null;
+
+if (!supabaseAdmin) {
+  console.error('⚠️ Supabase Admin クライアントが初期化できません。環境変数を確認してください。');
+}
 
 // ============================================
 // マスタデータ取得ヘルパー
 // ============================================
 
-/** organization_id に属する勘定科目を取得 */
 async function fetchAccountItems(organizationId: string): Promise<AccountItemRef[]> {
+  if (!supabaseAdmin) {
+    console.error('[fetchAccountItems] supabaseAdmin が null です');
+    return [];
+  }
+
+  console.log(`[fetchAccountItems] organization_id=${organizationId} で取得開始`);
+
   const { data, error } = await supabaseAdmin
     .from('account_items')
     .select('id, code, name, category:account_categories(name)')
@@ -37,9 +57,11 @@ async function fetchAccountItems(organizationId: string): Promise<AccountItemRef
     .order('code', { ascending: true });
 
   if (error) {
-    console.error('勘定科目取得エラー:', error);
+    console.error('[fetchAccountItems] エラー:', JSON.stringify(error));
     return [];
   }
+
+  console.log(`[fetchAccountItems] ${(data || []).length} 件取得`);
 
   return (data || []).map((item: any) => ({
     id: item.id,
@@ -49,8 +71,12 @@ async function fetchAccountItems(organizationId: string): Promise<AccountItemRef
   }));
 }
 
-/** 税区分を取得（システム共通マスタ） */
 async function fetchTaxCategories(): Promise<TaxCategoryRef[]> {
+  if (!supabaseAdmin) {
+    console.error('[fetchTaxCategories] supabaseAdmin が null です');
+    return [];
+  }
+
   const { data, error } = await supabaseAdmin
     .from('tax_categories')
     .select('id, code, name, rate')
@@ -58,9 +84,11 @@ async function fetchTaxCategories(): Promise<TaxCategoryRef[]> {
     .order('code', { ascending: true });
 
   if (error) {
-    console.error('税区分取得エラー:', error);
+    console.error('[fetchTaxCategories] エラー:', JSON.stringify(error));
     return [];
   }
+
+  console.log(`[fetchTaxCategories] ${(data || []).length} 件取得`);
 
   return (data || []).map((item: any) => ({
     id: item.id,
@@ -70,9 +98,10 @@ async function fetchTaxCategories(): Promise<TaxCategoryRef[]> {
   }));
 }
 
-/** 「雑費」のフォールバック用 UUID を取得 */
 async function findFallbackAccountId(organizationId: string): Promise<string> {
-  const { data } = await supabaseAdmin
+  if (!supabaseAdmin) return '';
+
+  const { data, error } = await supabaseAdmin
     .from('account_items')
     .select('id')
     .eq('organization_id', organizationId)
@@ -80,18 +109,39 @@ async function findFallbackAccountId(organizationId: string): Promise<string> {
     .limit(1)
     .single();
 
+  if (error) {
+    console.warn('[findFallbackAccountId] 雑費が見つかりません:', JSON.stringify(error));
+  }
+
   return data?.id || '';
 }
 
-/** client_id → organization_id を解決 */
 async function getOrganizationId(clientId: string): Promise<string | null> {
-  const { data } = await supabaseAdmin
+  if (!supabaseAdmin) {
+    console.error('[getOrganizationId] supabaseAdmin が null です');
+    return null;
+  }
+
+  console.log(`[getOrganizationId] client_id=${clientId} で検索開始`);
+
+  const { data, error } = await supabaseAdmin
     .from('clients')
     .select('organization_id')
     .eq('id', clientId)
     .single();
 
-  return data?.organization_id || null;
+  if (error) {
+    console.error('[getOrganizationId] Supabase エラー:', JSON.stringify(error));
+    return null;
+  }
+
+  if (!data) {
+    console.error(`[getOrganizationId] client_id=${clientId} のデータが見つかりません（data=null）`);
+    return null;
+  }
+
+  console.log(`[getOrganizationId] → organization_id=${data.organization_id}`);
+  return data.organization_id || null;
 }
 
 // ============================================
@@ -102,8 +152,7 @@ if (!fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 
-// Multer設定（ファイルアップロード）
-const storage = multer.diskStorage({
+const multerStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, UPLOAD_DIR);
   },
@@ -114,8 +163,8 @@ const storage = multer.diskStorage({
 });
 
 const upload = multer({
-  storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  storage: multerStorage,
+  limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowedTypes = /jpeg|jpg|png|webp|pdf/;
     const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
@@ -185,6 +234,12 @@ router.post('/ocr/process', async (req: Request, res: Response) => {
 
     console.log('OCR処理開始:', document_id);
     const ocrResult = await processOCR(targetUrl);
+    console.log('OCR処理完了:', {
+      document_id,
+      supplier: ocrResult.extracted_supplier,
+      amount: ocrResult.extracted_amount,
+      confidence: ocrResult.confidence_score,
+    });
 
     res.json({
       success: true,
@@ -197,7 +252,7 @@ router.post('/ocr/process', async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    console.error('OCR処理エラー:', error);
+    console.error('OCR処理エラー:', error.message, error.stack);
     res.status(500).json({ error: error.message });
   }
 });
@@ -210,20 +265,64 @@ router.post('/journal-entries/generate', async (req: Request, res: Response) => 
   try {
     const { document_id, client_id, ocr_result, industry } = req.body;
 
+    console.log('=== 仕訳生成リクエスト受信 ===');
+    console.log('  document_id:', document_id);
+    console.log('  client_id:', client_id);
+    console.log('  industry:', industry);
+    console.log('  ocr_result存在:', !!ocr_result);
+    console.log('  ocr_result.extracted_supplier:', ocr_result?.extracted_supplier);
+    console.log('  ocr_result.extracted_amount:', ocr_result?.extracted_amount);
+
     if (!document_id || !client_id || !ocr_result) {
+      console.error('=== 必須パラメータ不足 ===');
+      console.error('  document_id:', !!document_id);
+      console.error('  client_id:', !!client_id);
+      console.error('  ocr_result:', !!ocr_result);
       return res.status(400).json({ error: '必須パラメータが不足しています' });
     }
 
     // -----------------------------------------------
-    // 1. organization_id を解決
+    // 1. Supabase接続チェック
     // -----------------------------------------------
-    const organizationId = await getOrganizationId(client_id);
-    if (!organizationId) {
-      return res.status(400).json({ error: '指定された client_id に紐づく組織が見つかりません' });
+    if (!supabaseAdmin) {
+      console.error('=== supabaseAdmin が未初期化 ===');
+      console.error('  SUPABASE_URL:', supabaseUrl || '未設定');
+      console.error('  SERVICE_ROLE_KEY:', supabaseServiceKey ? '設定済み' : '未設定');
+      return res.status(500).json({
+        error: 'サーバーのSupabase接続が設定されていません。環境変数 SUPABASE_URL と SUPABASE_SERVICE_ROLE_KEY を確認してください。',
+      });
     }
 
     // -----------------------------------------------
-    // 2. マスタデータを取得
+    // 2. organization_id を解決
+    // -----------------------------------------------
+    const organizationId = await getOrganizationId(client_id);
+    if (!organizationId) {
+      console.error('=== organization_id 解決失敗 ===');
+      console.error('  client_id:', client_id);
+
+      // 追加診断: clients テーブルの全件数を確認
+      const { count, error: countErr } = await supabaseAdmin
+        .from('clients')
+        .select('*', { count: 'exact', head: true });
+      console.error('  clients テーブル総件数:', count, '  エラー:', countErr ? JSON.stringify(countErr) : 'なし');
+
+      return res.status(400).json({
+        error: '指定された client_id に紐づく組織が見つかりません',
+        debug: {
+          client_id,
+          supabase_url_set: !!supabaseUrl,
+          service_key_set: !!supabaseServiceKey,
+          clients_count: count,
+          clients_count_error: countErr?.message || null,
+        },
+      });
+    }
+
+    console.log('  organization_id:', organizationId);
+
+    // -----------------------------------------------
+    // 3. マスタデータを取得
     // -----------------------------------------------
     const [accountItems, taxCategories, fallbackAccountId] = await Promise.all([
       fetchAccountItems(organizationId),
@@ -231,12 +330,16 @@ router.post('/journal-entries/generate', async (req: Request, res: Response) => 
       findFallbackAccountId(organizationId),
     ]);
 
+    console.log('  勘定科目:', accountItems.length, '件');
+    console.log('  税区分:', taxCategories.length, '件');
+    console.log('  雑費ID:', fallbackAccountId || 'なし');
+
     if (accountItems.length === 0) {
-      console.warn('勘定科目マスタが0件です。デフォルト仕訳のみ返します。');
+      console.warn('⚠️ 勘定科目マスタが0件です。デフォルト仕訳のみ返します。');
     }
 
     // -----------------------------------------------
-    // 3. AI仕訳生成
+    // 4. AI仕訳生成
     // -----------------------------------------------
     console.log('仕訳生成開始:', {
       supplier: ocr_result.extracted_supplier,
@@ -257,8 +360,14 @@ router.post('/journal-entries/generate', async (req: Request, res: Response) => 
       tax_categories: taxCategories,
     });
 
+    console.log('仕訳生成完了:', {
+      category: journalEntry.category,
+      confidence: journalEntry.confidence,
+      lines_count: journalEntry.lines.length,
+    });
+
     // -----------------------------------------------
-    // 4. AI出力の勘定科目名・税区分名 → DB UUID にマッピング
+    // 5. AI出力の勘定科目名・税区分名 → DB UUID にマッピング
     // -----------------------------------------------
     const mappedLines = mapLinesToDBFormat(
       journalEntry.lines,
@@ -267,8 +376,10 @@ router.post('/journal-entries/generate', async (req: Request, res: Response) => 
       fallbackAccountId
     );
 
+    console.log('マッピング完了:', mappedLines.length, '行');
+
     // -----------------------------------------------
-    // 5. レスポンス
+    // 6. レスポンス
     // -----------------------------------------------
     const entry = {
       document_id,
@@ -278,11 +389,11 @@ router.post('/journal-entries/generate', async (req: Request, res: Response) => 
       notes: journalEntry.notes,
       confidence: journalEntry.confidence,
       reasoning: journalEntry.reasoning,
-      // DB保存用にマッピング済みの明細行
       lines: mappedLines,
-      // デバッグ用にAI生の出力も返す
       _raw_lines: journalEntry.lines,
     };
+
+    console.log('=== 仕訳生成レスポンス送信 ===');
 
     res.json({
       success: true,
@@ -290,7 +401,9 @@ router.post('/journal-entries/generate', async (req: Request, res: Response) => 
       journal_entry: entry,
     });
   } catch (error: any) {
-    console.error('仕訳生成エラー:', error);
+    console.error('=== 仕訳生成エラー ===');
+    console.error('  message:', error.message);
+    console.error('  stack:', error.stack);
     res.status(500).json({ error: error.message });
   }
 });
@@ -307,7 +420,6 @@ router.post('/freee/export', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'journal_entriesは配列である必要があります' });
     }
 
-    // freee形式に変換（後続実装で詳細化）
     const transactions = journal_entries.map((entry: any) => ({
       issue_date: entry.entry_date,
       type: 'expense' as 'income' | 'expense',
@@ -331,7 +443,7 @@ router.post('/freee/export', async (req: Request, res: Response) => {
 });
 
 // ============================================
-// 一括処理API（アップロード → OCR → 仕訳生成）
+// 一括処理API
 // ============================================
 
 router.post('/process/batch', upload.array('files', 500), async (req: Request, res: Response) => {
@@ -348,7 +460,10 @@ router.post('/process/batch', upload.array('files', 500), async (req: Request, r
       return res.status(400).json({ error: 'client_idとuploaded_byは必須です' });
     }
 
-    // マスタデータを1回だけ取得
+    if (!supabaseAdmin) {
+      return res.status(500).json({ error: 'Supabase接続が未設定です' });
+    }
+
     const organizationId = await getOrganizationId(client_id);
     if (!organizationId) {
       return res.status(400).json({ error: '指定された client_id に紐づく組織が見つかりません' });
@@ -364,12 +479,10 @@ router.post('/process/batch', upload.array('files', 500), async (req: Request, r
 
     for (const file of files) {
       try {
-        console.log(`処理中: ${file.originalname}`);
+        console.log(`バッチ処理中: ${file.originalname}`);
 
-        // 1. OCR処理
         const ocrResult = await processOCR(file.path);
 
-        // 2. 仕訳生成
         const journalEntry = await generateJournalEntry({
           date: ocrResult.extracted_date || new Date().toISOString().split('T')[0],
           supplier: ocrResult.extracted_supplier || '不明',
@@ -384,7 +497,6 @@ router.post('/process/batch', upload.array('files', 500), async (req: Request, r
           tax_categories: taxCategories,
         });
 
-        // 3. UUID マッピング
         const mappedLines = mapLinesToDBFormat(
           journalEntry.lines,
           accountItems,
@@ -406,9 +518,9 @@ router.post('/process/batch', upload.array('files', 500), async (req: Request, r
           },
         });
 
-        console.log(`完了: ${file.originalname}`);
+        console.log(`バッチ完了: ${file.originalname}`);
       } catch (error: any) {
-        console.error(`エラー (${file.originalname}):`, error);
+        console.error(`バッチエラー (${file.originalname}):`, error.message);
         results.push({
           file_name: file.originalname,
           success: false,
@@ -429,23 +541,60 @@ router.post('/process/batch', upload.array('files', 500), async (req: Request, r
       results,
     });
   } catch (error: any) {
-    console.error('バッチ処理エラー:', error);
+    console.error('バッチ処理エラー:', error.message, error.stack);
     res.status(500).json({ error: error.message });
   }
 });
 
 // ============================================
-// ヘルスチェックAPI
+// ヘルスチェックAPI（診断情報付き）
 // ============================================
 
-router.get('/health', (req: Request, res: Response) => {
+router.get('/health', async (req: Request, res: Response) => {
+  let supabaseStatus = 'not_configured';
+  let clientsCount: number | null = null;
+  let supabaseError: string | null = null;
+
+  if (supabaseAdmin) {
+    try {
+      const { count, error } = await supabaseAdmin
+        .from('clients')
+        .select('*', { count: 'exact', head: true });
+
+      if (error) {
+        supabaseStatus = 'error';
+        supabaseError = error.message;
+      } else {
+        supabaseStatus = 'connected';
+        clientsCount = count;
+      }
+    } catch (e: any) {
+      supabaseStatus = 'exception';
+      supabaseError = e.message;
+    }
+  }
+
   res.json({
     status: 'ok',
     message: 'APIサーバーは正常に動作しています',
     timestamp: new Date().toISOString(),
     gemini_configured: !!process.env.GEMINI_API_KEY,
     gemini_model: process.env.GEMINI_MODEL || 'gemini-3.1-pro-preview',
-    supabase_configured: !!supabaseUrl && !!supabaseServiceKey,
+    supabase: {
+      url_set: !!supabaseUrl,
+      service_key_set: !!supabaseServiceKey,
+      admin_initialized: !!supabaseAdmin,
+      connection_status: supabaseStatus,
+      clients_count: clientsCount,
+      error: supabaseError,
+    },
+    env_vars: {
+      SUPABASE_URL: process.env.SUPABASE_URL ? '✅' : '❌',
+      VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL ? '✅' : '❌',
+      SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY ? '✅' : '❌',
+      GEMINI_API_KEY: process.env.GEMINI_API_KEY ? '✅' : '❌',
+      GEMINI_MODEL: process.env.GEMINI_MODEL || '(default: gemini-3.1-pro-preview)',
+    },
   });
 });
 
