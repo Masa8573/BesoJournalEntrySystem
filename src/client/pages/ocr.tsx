@@ -1,571 +1,507 @@
-import { useState, useEffect } from 'react';
-import { CheckCircle, AlertCircle, Loader } from 'lucide-react';
-import { useWorkflow } from '@/client/context/WorkflowContext';
-import { supabase } from '@/client/lib/supabase';
-import { documentsApi } from '@/client/lib/api';
-import ProgressBar from '@/client/components/workflow/ProgressBar';
-import WorkflowNavigation from '@/client/components/workflow/WorkflowNavigation';
+import { GoogleGenAI } from '@google/genai';
 
-interface OCRResult {
-  id: string;
-  documentId: string;
-  fileName: string;
-  storagePath: string;
-  status: 'pending' | 'processing' | 'completed' | 'error';
-  confidence?: number;
-  processedAt?: string;
-  errorMessage?: string;
-  journalEntryId?: string; // 生成された仕訳のDB ID
+// Gemini APIクライアントの初期化（新SDK: @google/genai）
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+
+// 使用モデル（環境変数で切替可能）
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.1-pro-preview';
+
+// ============================================
+// OCRサービス - 画像から文字を抽出
+// ============================================
+
+/** OCR で抽出する各取引の型 */
+export interface OCRTransaction {
+  date: string | null;
+  supplier: string | null;
+  total_amount: number | null;
+  tax_amount: number | null;
+  tax_details: {
+    rate_10_amount: number | null;
+    rate_10_tax: number | null;
+    rate_8_amount: number | null;
+    rate_8_tax: number | null;
+    exempt_amount: number | null;
+  } | null;
+  tax_included: boolean;
+  payment_method: string | null;
+  invoice_number: string | null;
+  reference_number: string | null;
+  items: Array<{
+    name: string;
+    quantity: number | null;
+    unit_price: number | null;
+    amount: number;
+    tax_rate: number | null;
+  }>;
 }
 
-// Express API のベースURL
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+export interface OCRResult {
+  raw_text: string;
+  document_type: 'receipt' | 'invoice' | 'bank_statement' | 'credit_card' | 'other';
+  transactions: OCRTransaction[];
+  // 後続処理との互換性のため、先頭取引の代表値も保持
+  extracted_date: string | null;
+  extracted_supplier: string | null;
+  extracted_amount: number | null;
+  extracted_tax_amount: number | null;
+  extracted_items: Array<{
+    name: string;
+    quantity?: number;
+    unit_price?: number;
+    amount: number;
+    tax_rate?: number;
+  }> | null;
+  extracted_payment_method: string | null;
+  extracted_invoice_number: string | null;
+  confidence_score: number;
+}
 
-export default function OCRPage() {
-  const { currentWorkflow, updateWorkflowData } = useWorkflow();
-  const [ocrResults, setOcrResults] = useState<OCRResult[]>([]);
-  const [processing, setProcessing] = useState(false);
-  const [industry, setIndustry] = useState<string>('');
+export async function processOCR(imageUrl: string): Promise<OCRResult> {
+  try {
+    // URL から画像を取得して Base64 エンコード
+    const fetchRes = await fetch(imageUrl);
+    if (!fetchRes.ok) {
+      throw new Error(`画像の取得に失敗しました: ${fetchRes.status}`);
+    }
+    const arrayBuffer = await fetchRes.arrayBuffer();
+    const base64Image = Buffer.from(arrayBuffer).toString('base64');
+    const contentType = fetchRes.headers.get('content-type') || 'image/jpeg';
 
-  // ============================================
-  // アップロード済みドキュメントを DB から取得して初期化
-  // ============================================
-  useEffect(() => {
-    if (!currentWorkflow) return;
+    // MIMEタイプを URL または Content-Type から推定
+    const ext = imageUrl.split('?')[0].split('.').pop()?.toLowerCase();
+    const mimeType =
+      ext === 'pdf' || contentType.includes('pdf')
+        ? 'application/pdf'
+        : ext === 'png' || contentType.includes('png')
+        ? 'image/png'
+        : ext === 'webp' || contentType.includes('webp')
+        ? 'image/webp'
+        : 'image/jpeg';
 
-    const documentIds = currentWorkflow.data.documents || [];
-    if (documentIds.length === 0) return;
+    const prompt = `あなたは日本の経理書類を読み取る専門AIです。
+この画像はレシート、領収書、請求書、通帳、またはクレジットカード明細です。
+以下の情報を正確に抽出してJSON形式で返してください。
 
-    const initResults = async () => {
-      // documents テーブルから詳細を取得
-      const results: OCRResult[] = [];
-      for (const docId of documentIds) {
-        const { data: doc } = await documentsApi.getById(docId);
-        if (doc) {
-          results.push({
-            id: `ocr-${docId}`,
-            documentId: docId,
-            fileName: doc.original_file_name || doc.file_name,
-            storagePath: doc.storage_path || doc.file_path,
-            status: doc.ocr_status === 'completed' ? 'completed' : 'pending',
-            confidence: doc.ocr_confidence ? doc.ocr_confidence * 100 : undefined,
-          });
+【重要ルール】
+- 通帳・クレジットカード明細など複数の取引が含まれる場合は、transactions 配列に各取引を個別のオブジェクトとして列挙してください。
+- レシート・領収書など単一取引の場合も transactions 配列に1件として格納してください。
+- 日付は必ず YYYY-MM-DD 形式に変換してください（和暦は西暦に変換）。
+- 金額は数値のみ（カンマなし）で返してください。
+- 消費税が記載されていない場合は null にしてください（逆算不要）。
+- 品目が読み取れない場合は items を空配列にしてください。
+- JSONのみを返し、他の説明文やマークダウンのコードブロックは含めないでください。
+
+{
+  "document_type": "receipt" | "invoice" | "bank_statement" | "credit_card" | "other",
+  "confidence": 0.0〜1.0（読み取り全体の確信度。鮮明なら0.9以上、不鮮明なら0.5以下）,
+  "transactions": [
+    {
+      "date": "YYYY-MM-DD",
+      "supplier": "取引先名・店舗名（正式名称で）",
+      "total_amount": 合計金額（数値のみ）,
+      "tax_amount": 消費税額合計（数値のみ、不明ならnull）,
+      "tax_details": {
+        "rate_10_amount": 10%対象の税抜金額（不明ならnull）,
+        "rate_10_tax": 10%の消費税額（不明ならnull）,
+        "rate_8_amount": 8%対象の税抜金額（不明ならnull）,
+        "rate_8_tax": 8%の消費税額（不明ならnull）,
+        "exempt_amount": 非課税金額（不明ならnull）
+      },
+      "tax_included": true（内税）またはfalse（外税）,
+      "payment_method": "cash" | "credit_card" | "bank_transfer" | "e_money" | "other" | null,
+      "invoice_number": "インボイス登録番号（Tから始まる番号、なければnull）",
+      "reference_number": "伝票番号・取引番号（なければnull）",
+      "items": [
+        {
+          "name": "商品名・摘要",
+          "quantity": 数量（不明ならnull）,
+          "unit_price": 単価（不明ならnull）,
+          "amount": 金額（数値のみ）,
+          "tax_rate": 0.10 | 0.08 | 0（税率。※マークがあれば0.08、不明ならnull）
         }
-      }
+      ]
+    }
+  ]
+}
 
-      // クライアントの業種を取得
-      const clientId = currentWorkflow.clientId;
-      const { data: client } = await supabase
-        .from('clients')
-        .select('industry:industries(name)')
-        .eq('id', clientId)
-        .single();
+【判定のヒント】
+- レシートに「※」や「＊」マークがある品目は軽減税率8%対象（食品・飲料）
+- 「T」で始まる13桁の番号はインボイス登録番号
+- 「内税」「税込」表記があれば tax_included: true
+- 「外税」「税抜」表記があれば tax_included: false
+- 支払方法は「現金」「カード」「振込」「電子マネー」等の記載から判定`;
 
-      if (client?.industry) {
-        setIndustry((client.industry as any).name || '');
-      }
+    const result = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { text: prompt },
+            {
+              inlineData: {
+                mimeType,
+                data: base64Image,
+              },
+            },
+          ],
+        },
+      ],
+    });
 
-      setOcrResults(results);
+    const text = result.text ?? '';
+
+    // JSONを抽出（マークダウンコードブロックを除去）
+    const jsonMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/) || text.match(/\{[\s\S]*\}/);
+    const jsonText = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : text;
+
+    const extracted = JSON.parse(jsonText);
+
+    // transactions 配列の正規化
+    const transactions: OCRTransaction[] = (extracted.transactions || []).map((tx: any) => ({
+      date: tx.date || null,
+      supplier: tx.supplier || null,
+      total_amount: tx.total_amount != null ? Number(tx.total_amount) : null,
+      tax_amount: tx.tax_amount != null ? Number(tx.tax_amount) : null,
+      tax_details: tx.tax_details || null,
+      tax_included: tx.tax_included ?? true,
+      payment_method: tx.payment_method || null,
+      invoice_number: tx.invoice_number || null,
+      reference_number: tx.reference_number || null,
+      items: (tx.items || []).map((item: any) => ({
+        name: item.name || '',
+        quantity: item.quantity ?? null,
+        unit_price: item.unit_price ?? null,
+        amount: Number(item.amount) || 0,
+        tax_rate: item.tax_rate ?? null,
+      })),
+    }));
+
+    // 先頭取引を代表値として使用
+    const firstTx = transactions[0] || ({} as OCRTransaction);
+
+    return {
+      raw_text: text,
+      document_type: extracted.document_type || 'other',
+      transactions,
+      extracted_date: firstTx.date || null,
+      extracted_supplier: firstTx.supplier || null,
+      extracted_amount: firstTx.total_amount ?? null,
+      extracted_tax_amount: firstTx.tax_amount ?? null,
+      extracted_items: firstTx.items?.length
+        ? firstTx.items.map((i) => ({
+            name: i.name,
+            quantity: i.quantity ?? undefined,
+            unit_price: i.unit_price ?? undefined,
+            amount: i.amount,
+            tax_rate: i.tax_rate ?? undefined,
+          }))
+        : null,
+      extracted_payment_method: firstTx.payment_method || null,
+      extracted_invoice_number: firstTx.invoice_number || null,
+      confidence_score: extracted.confidence ?? 0.85,
     };
-
-    initResults();
-  }, [currentWorkflow]);
-
-  // ============================================
-  // OCR + 仕訳生成 処理（1件ずつ順次処理）
-  // ============================================
-  const startOCRProcessing = async () => {
-    setProcessing(true);
-
-    for (let i = 0; i < ocrResults.length; i++) {
-      const result = ocrResults[i];
-      if (result.status === 'completed') continue; // スキップ（再処理不要）
-
-      // 処理中に更新
-      setOcrResults((prev) =>
-        prev.map((r) => (r.id === result.id ? { ...r, status: 'processing' } : r))
-      );
-
-      try {
-        // -----------------------------------------------
-        // STEP 1: Storage から署名付き URL を取得してサーバーへ渡す
-        // -----------------------------------------------
-        const { data: signedUrlData, error: urlError } = await supabase.storage
-          .from('documents')
-          .createSignedUrl(result.storagePath, 300); // 5分有効
-
-        if (urlError || !signedUrlData?.signedUrl) {
-          throw new Error('ファイルURLの取得に失敗しました');
-        }
-
-        // -----------------------------------------------
-        // STEP 2: OCR API 呼び出し
-        // サーバーが signed URL から画像を取得して OCR 処理
-        // -----------------------------------------------
-        const ocrResponse = await fetch(`${API_BASE}/api/ocr/process`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            document_id: result.documentId,
-            file_url: signedUrlData.signedUrl,
-            file_path: result.storagePath, // フォールバック用
-          }),
-        });
-
-        if (!ocrResponse.ok) {
-          const errData = await ocrResponse.json().catch(() => ({}));
-          throw new Error(errData.error || `OCR API エラー: ${ocrResponse.status}`);
-        }
-
-        const ocrData = await ocrResponse.json();
-        const ocrResult = ocrData.ocr_result;
-
-        // -----------------------------------------------
-        // STEP 3: OCR 結果を documents テーブルに保存
-        // -----------------------------------------------
-        await documentsApi.update(result.documentId, {
-          ocr_status: 'completed',
-          ocr_confidence: ocrResult.confidence_score,
-          supplier_name: ocrResult.extracted_supplier,
-          amount: ocrResult.extracted_amount,
-          tax_amount: ocrResult.extracted_tax_amount,
-          document_date: ocrResult.extracted_date || new Date().toISOString().split('T')[0],
-          status: 'ocr_completed',
-        } as any);
-
-        // -----------------------------------------------
-        // STEP 4: 仕訳生成 API 呼び出し
-        // -----------------------------------------------
-        const journalResponse = await fetch(`${API_BASE}/api/journal-entries/generate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            document_id: result.documentId,
-            client_id: currentWorkflow!.clientId,
-            ocr_result: ocrResult,
-            industry,
-          }),
-        });
-
-        if (!journalResponse.ok) {
-          const errData = await journalResponse.json().catch(() => ({}));
-          throw new Error(errData.error || `仕訳生成 API エラー: ${journalResponse.status}`);
-        }
-
-        const journalData = await journalResponse.json();
-        const journalEntry = journalData.journal_entry;
-
-        // -----------------------------------------------
-        // STEP 5: 仕訳を journal_entries + lines テーブルに保存
-        // -----------------------------------------------
-        // organization_id を取得（RLSポリシー必須）
-        const { data: { user: authUser } } = await supabase.auth.getUser();
-        const { data: userRow } = await supabase
-          .from('users')
-          .select('organization_id')
-          .eq('id', authUser!.id)
-          .single();
-
-        // ヘッダー保存
-        const { data: savedEntry, error: dbSaveError } = await supabase
-          .from('journal_entries')
-          .insert({
-            organization_id: userRow!.organization_id,
-            client_id: currentWorkflow!.clientId,
-            workflow_id: currentWorkflow!.id,
-            document_id: result.documentId,
-            entry_date: journalEntry.entry_date || ocrResult.extracted_date || new Date().toISOString().split('T')[0],
-            entry_type: 'normal',
-            description: journalEntry.notes,
-            status: 'pending',
-            ai_generated: true,
-            ai_confidence: journalEntry.confidence,
-          })
-          .select()
-          .single();
-
-        if (dbSaveError) {
-          console.error('仕訳保存エラー:', dbSaveError);
-        }
-
-        // 明細行（lines）を保存
-        if (savedEntry?.id && journalEntry.lines?.length > 0) {
-          // AIが返した勘定科目コード/名称 → UUID に変換
-          for (let lineIdx = 0; lineIdx < journalEntry.lines.length; lineIdx++) {
-            const line = journalEntry.lines[lineIdx];
-
-            // 借方勘定科目 UUID を検索（code または name で）
-            const { data: debitAccountRows } = await supabase
-              .from('account_items')
-              .select('id, name, code')
-              .or(`code.eq.${line.debit_account_code},name.eq.${line.debit_account}`)
-              .limit(1);
-            const debitAccountId = debitAccountRows?.[0]?.id || null;
-
-            // 貸方勘定科目 UUID を検索
-            const { data: creditAccountRows } = await supabase
-              .from('account_items')
-              .select('id, name, code')
-              .or(`code.eq.${line.credit_account_code},name.eq.${line.credit_account}`)
-              .limit(1);
-            const creditAccountId = creditAccountRows?.[0]?.id || null;
-
-            // 税区分 UUID を検索（name または display_name で）
-            const { data: taxCatRows } = await supabase
-              .from('tax_categories')
-              .select('id, name, display_name')
-              .or(`name.eq.${line.tax_category},display_name.eq.${line.tax_category}`)
-              .limit(1);
-            const taxCategoryId = taxCatRows?.[0]?.id || null;
-
-            // 借方行を保存
-            if (debitAccountId) {
-              await supabase.from('journal_entry_lines').insert({
-                journal_entry_id: savedEntry.id,
-                line_number: lineIdx * 2 + 1,
-                debit_credit: 'debit',
-                account_item_id: debitAccountId,
-                tax_category_id: taxCategoryId,
-                amount: line.amount || ocrResult.extracted_amount || 0,
-                description: line.description || journalEntry.notes,
-              });
-            }
-
-            // 貸方行を保存
-            if (creditAccountId) {
-              await supabase.from('journal_entry_lines').insert({
-                journal_entry_id: savedEntry.id,
-                line_number: lineIdx * 2 + 2,
-                debit_credit: 'credit',
-                account_item_id: creditAccountId,
-                tax_category_id: null,
-                amount: line.amount || ocrResult.extracted_amount || 0,
-                description: line.description || journalEntry.notes,
-              });
-            }
-          }
-        }
-
-        // documents ステータスを ai_processing → reviewed に更新
-        await documentsApi.update(result.documentId, {
-          status: 'ai_processing',
-        } as any);
-
-        // -----------------------------------------------
-        // STEP 6: 進捗を更新（完了）
-        // -----------------------------------------------
-        setOcrResults((prev) =>
-          prev.map((r) =>
-            r.id === result.id
-              ? {
-                  ...r,
-                  status: 'completed',
-                  confidence: Math.round((ocrResult.confidence_score || 0.85) * 100),
-                  processedAt: new Date().toISOString(),
-                  journalEntryId: savedEntry?.id,
-                }
-              : r
-          )
-        );
-      } catch (error: any) {
-        console.error(`OCR エラー (${result.fileName}):`, error);
-
-        // documents テーブルのステータスをエラーに更新
-        await documentsApi.update(result.documentId, {
-          ocr_status: 'error',
-          status: 'uploaded', // ステータスを戻す
-        } as any);
-
-        setOcrResults((prev) =>
-          prev.map((r) =>
-            r.id === result.id
-              ? {
-                  ...r,
-                  status: 'error',
-                  errorMessage: error.message,
-                }
-              : r
-          )
-        );
-      }
-    }
-
-    setProcessing(false);
-  };
-
-  // ============================================
-  // 次へ進む前の検証
-  // ============================================
-  const handleBeforeNext = async (): Promise<boolean> => {
-    const hasError = ocrResults.some((r) => r.status === 'error');
-    const hasNotCompleted = ocrResults.some(
-      (r) => r.status === 'pending' || r.status === 'processing'
-    );
-
-    if (hasNotCompleted) {
-      alert('すべてのOCR処理が完了していません。処理を開始してください。');
-      return false;
-    }
-
-    if (hasError) {
-      const proceed = window.confirm(
-        'エラーの証憑があります。エラー件数: ' +
-          ocrResults.filter((r) => r.status === 'error').length +
-          '件\nこのまま次へ進みますか？（エラー件数は除外されます）'
-      );
-      if (!proceed) return false;
-    }
-
-    // 完了した OCR 結果の ID をワークフローに保存
-    const completedIds = ocrResults
-      .filter((r) => r.status === 'completed')
-      .map((r) => r.id);
-
-    updateWorkflowData({ ocrResults: completedIds });
-
-    return true;
-  };
-
-  // ============================================
-  // カウント
-  // ============================================
-  const completedCount = ocrResults.filter((r) => r.status === 'completed').length;
-  const processingCount = ocrResults.filter((r) => r.status === 'processing').length;
-  const pendingCount = ocrResults.filter((r) => r.status === 'pending').length;
-  const errorCount = ocrResults.filter((r) => r.status === 'error').length;
-  const totalCount = ocrResults.length;
-
-  // 進捗率（実際の完了件数 / 総件数）
-  const progressPercent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
-
-  const allCompleted =
-    totalCount > 0 && ocrResults.every((r) => r.status === 'completed' || r.status === 'error');
-
-  // ============================================
-  // ワークフロー外アクセスガード
-  // ============================================
-  if (!currentWorkflow) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full">
-        <div className="text-center max-w-md">
-          <AlertCircle size={64} className="text-yellow-500 mx-auto mb-4" />
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">
-            ワークフローが開始されていません
-          </h2>
-          <p className="text-gray-600 mb-6">
-            OCR処理を行うには、顧客一覧からワークフローを開始してください。
-          </p>
-          <a href="/clients" className="btn-primary">
-            顧客一覧へ戻る
-          </a>
-        </div>
-      </div>
-    );
+  } catch (error) {
+    console.error('OCR処理エラー:', error);
+    throw new Error(`OCR処理に失敗しました: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
 
-  return (
-    <div className="flex flex-col h-screen">
-      {/* 進捗バー */}
-      <ProgressBar />
+// ============================================
+// AI仕訳生成サービス
+// ============================================
 
-      {/* メインコンテンツ */}
-      <div className="flex-1 overflow-y-auto p-6">
-        <div className="max-w-5xl mx-auto space-y-6">
-          {/* ページヘッダー */}
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">OCR処理</h1>
-            <p className="text-sm text-gray-500 mt-1">
-              {currentWorkflow.clientName}さんの証憑を自動読み取りします
-            </p>
-          </div>
+/** 勘定科目マスタの簡易型（呼び出し元から渡す） */
+export interface AccountItemRef {
+  id: string;
+  code: string;
+  name: string;
+  category: string;
+}
 
-          {/* サマリーカード */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="card">
-              <div className="flex items-center gap-2 mb-2">
-                <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
-                <h3 className="text-sm font-medium text-gray-600">総ファイル数</h3>
-              </div>
-              <div className="text-3xl font-bold text-gray-900">{totalCount}</div>
-            </div>
+/** 税区分マスタの簡易型（呼び出し元から渡す） */
+export interface TaxCategoryRef {
+  id: string;
+  code: string;
+  name: string;
+  rate: number;
+}
 
-            <div className="card">
-              <div className="flex items-center gap-2 mb-2">
-                <CheckCircle size={20} className="text-green-500" />
-                <h3 className="text-sm font-medium text-gray-600">完了</h3>
-              </div>
-              <div className="text-3xl font-bold text-gray-900">{completedCount}</div>
-            </div>
+export interface JournalEntryInput {
+  date: string;
+  supplier: string;
+  amount: number;
+  tax_amount: number | null;
+  tax_details: OCRTransaction['tax_details'];
+  items: Array<{ name: string; amount: number; tax_rate?: number | null }> | null;
+  payment_method: string | null;
+  invoice_number: string | null;
+  industry?: string;
+  account_items: AccountItemRef[];
+  tax_categories: TaxCategoryRef[];
+}
 
-            <div className="card">
-              <div className="flex items-center gap-2 mb-2">
-                <Loader size={20} className="text-orange-500" />
-                <h3 className="text-sm font-medium text-gray-600">処理中</h3>
-              </div>
-              <div className="text-3xl font-bold text-gray-900">{processingCount}</div>
-            </div>
+/** AI が生成する仕訳明細行（DB構造に近い形） */
+export interface GeneratedJournalLine {
+  line_number: number;
+  debit_credit: 'debit' | 'credit';
+  account_item_name: string;
+  tax_category_name: string | null;
+  amount: number;
+  tax_rate: number | null;
+  tax_amount: number | null;
+  description: string;
+}
 
-            <div className="card">
-              <div className="flex items-center gap-2 mb-2">
-                <AlertCircle size={20} className="text-red-500" />
-                <h3 className="text-sm font-medium text-gray-600">エラー</h3>
-              </div>
-              <div className="text-3xl font-bold text-gray-900">{errorCount}</div>
-            </div>
-          </div>
+export interface GeneratedJournalEntry {
+  category: '事業用' | 'プライベート';
+  notes: string;
+  confidence: number;
+  reasoning: string;
+  lines: GeneratedJournalLine[];
+}
 
-          {/* 処理進捗ゲージ（処理中のみ表示） */}
-          {processing && (
-            <div className="card">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="font-semibold text-gray-900">処理進捗</h3>
-                <span className="text-sm font-medium text-gray-700">
-                  {completedCount} / {totalCount} 件完了
-                </span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-3">
-                <div
-                  className="bg-blue-600 h-3 rounded-full transition-all duration-300"
-                  style={{ width: `${progressPercent}%` }}
-                ></div>
-              </div>
-              <p className="text-xs text-gray-500 mt-1 text-right">{progressPercent}%</p>
-            </div>
-          )}
+export async function generateJournalEntry(
+  input: JournalEntryInput
+): Promise<GeneratedJournalEntry> {
+  try {
+    const accountList = input.account_items
+      .map((a) => `${a.name}(${a.code}/${a.category})`)
+      .join(', ');
 
-          {/* OCR開始ボタン */}
-          {pendingCount > 0 && !processing && (
-            <div className="card bg-blue-50 border-blue-200">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="font-semibold text-gray-900 mb-1">OCR処理を開始</h3>
-                  <p className="text-sm text-gray-600">
-                    {pendingCount}件のファイルをOCR処理・仕訳生成します
-                  </p>
-                  {industry && (
-                    <p className="text-xs text-gray-500 mt-1">業種: {industry}</p>
-                  )}
-                </div>
-                <button onClick={startOCRProcessing} className="btn-primary">
-                  処理開始
-                </button>
-              </div>
-            </div>
-          )}
+    const taxCategoryList = input.tax_categories
+      .map((t) => `${t.name}(税率${(t.rate * 100).toFixed(0)}%)`)
+      .join(', ');
 
-          {/* 処理状況 */}
-          {ocrResults.length > 0 && (
-            <div className="card">
-              <h2 className="text-lg font-semibold text-gray-900 mb-4">処理状況</h2>
+    const paymentHint = (() => {
+      switch (input.payment_method) {
+        case 'credit_card': return '貸方は「未払金」または「クレジットカード」を使用';
+        case 'bank_transfer': return '貸方は「普通預金」を使用';
+        case 'e_money': return '貸方は「普通預金」または「未払金」を使用';
+        case 'cash':
+        default: return '貸方は「現金」を使用';
+      }
+    })();
 
-              <div className="space-y-3">
-                {ocrResults.map((result) => (
-                  <div
-                    key={result.id}
-                    className="flex items-center gap-4 p-4 bg-gray-50 rounded-lg border border-gray-200"
-                  >
-                    {/* ファイル名 */}
-                    <div className="flex-1">
-                      <p className="text-sm font-medium text-gray-900">{result.fileName}</p>
-                      {result.processedAt && (
-                        <p className="text-xs text-gray-500">
-                          処理完了: {new Date(result.processedAt).toLocaleString('ja-JP')}
-                        </p>
-                      )}
-                      {result.errorMessage && (
-                        <p className="text-xs text-red-500">{result.errorMessage}</p>
-                      )}
-                      {result.journalEntryId && (
-                        <p className="text-xs text-green-600">
-                          仕訳生成完了
-                        </p>
-                      )}
-                    </div>
+    const prompt = `あなたは日本の税理士のアシスタントAIです。以下の取引情報から適切な仕訳を生成してください。
 
-                    {/* 信頼度 */}
-                    {result.confidence !== undefined && (
-                      <div className="flex items-center gap-2">
-                        <div className="w-24 bg-gray-200 rounded-full h-2">
-                          <div
-                            className={`h-2 rounded-full ${
-                              result.confidence >= 90
-                                ? 'bg-green-500'
-                                : result.confidence >= 70
-                                ? 'bg-yellow-500'
-                                : 'bg-red-500'
-                            }`}
-                            style={{ width: `${result.confidence}%` }}
-                          ></div>
-                        </div>
-                        <span className="text-xs font-medium text-gray-700">
-                          {result.confidence}%
-                        </span>
-                      </div>
-                    )}
+【取引情報】
+- 取引日: ${input.date}
+- 取引先: ${input.supplier}
+- 合計金額: ${input.amount}円
+- 消費税: ${input.tax_amount !== null ? input.tax_amount + '円' : '不明'}
+${input.tax_details ? `- 税率内訳: 10%対象=${input.tax_details.rate_10_amount ?? '不明'}円(税${input.tax_details.rate_10_tax ?? '不明'}円), 8%対象=${input.tax_details.rate_8_amount ?? '不明'}円(税${input.tax_details.rate_8_tax ?? '不明'}円), 非課税=${input.tax_details.exempt_amount ?? '不明'}円` : ''}
+- 品目: ${input.items && input.items.length > 0 ? input.items.map((i) => `${i.name}(${i.amount}円${i.tax_rate != null ? '/税率' + (i.tax_rate * 100) + '%' : ''})`).join(', ') : '不明'}
+- 支払方法: ${input.payment_method || '不明'}
+${input.invoice_number ? `- インボイス登録番号: ${input.invoice_number}` : '- インボイス番号: なし'}
+${input.industry ? `- 業種: ${input.industry}` : ''}
 
-                    {/* ステータスバッジ */}
-                    <div className="flex items-center gap-2">
-                      {result.status === 'pending' && (
-                        <span className="badge badge-gray">待機中</span>
-                      )}
-                      {result.status === 'processing' && (
-                        <div className="flex items-center gap-2">
-                          <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                          <span className="badge badge-blue">処理中</span>
-                        </div>
-                      )}
-                      {result.status === 'completed' && (
-                        <div className="flex items-center gap-2">
-                          <CheckCircle size={20} className="text-green-500" />
-                          <span className="badge badge-green">完了</span>
-                        </div>
-                      )}
-                      {result.status === 'error' && (
-                        <div className="flex items-center gap-2">
-                          <AlertCircle size={20} className="text-red-500" />
-                          <span className="badge badge-red">エラー</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+【使用可能な勘定科目（この中から選んでください）】
+${accountList}
 
-          {/* 完了メッセージ */}
-          {allCompleted && completedCount > 0 && (
-            <div className="card bg-green-50 border-green-200">
-              <div className="flex items-center gap-3">
-                <CheckCircle size={32} className="text-green-600" />
-                <div>
-                  <h3 className="font-semibold text-green-900">OCR処理・仕訳生成が完了しました</h3>
-                  <p className="text-sm text-green-700">
-                    {completedCount}件を処理しました。次のステップに進んでください。
-                    {errorCount > 0 && ` (${errorCount}件はエラーのため除外)`}
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
+【使用可能な税区分（この中から選んでください）】
+${taxCategoryList}
 
-          {/* ファイルなし */}
-          {ocrResults.length === 0 && (
-            <div className="card text-center py-12">
-              <AlertCircle size={64} className="text-gray-300 mx-auto mb-4" />
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                処理するファイルがありません
-              </h3>
-              <p className="text-sm text-gray-500 mb-4">
-                前のステップで証憑をアップロードしてください
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
+【出力形式】
+以下のJSON形式で返してください。JSONのみを返し、コードブロックや説明文は不要です。
 
-      {/* ナビゲーション */}
-      <WorkflowNavigation onBeforeNext={handleBeforeNext} nextLabel="AIチェックへ" />
-    </div>
-  );
+{
+  "category": "事業用" または "プライベート",
+  "notes": "摘要（取引先名と品目を含める。例：ENEOS セルフ神戸北 ガソリン）",
+  "confidence": 0.0〜1.0の信頼度,
+  "reasoning": "判断理由（日本語で簡潔に）",
+  "lines": [
+    {
+      "line_number": 1,
+      "debit_credit": "debit" または "credit",
+      "account_item_name": "勘定科目名（上記リストから選択）",
+      "tax_category_name": "税区分名（上記リストから選択。対象外ならnull）",
+      "amount": 金額（数値のみ）,
+      "tax_rate": 税率（0.10 または 0.08 または 0 または null）,
+      "tax_amount": 消費税額（数値のみ、不明ならnull）,
+      "description": "明細摘要"
+    }
+  ]
+}
+
+【仕訳ルール】
+1. 借方（debit）と貸方（credit）の合計金額は必ず一致させること。
+2. ${paymentHint}。
+3. 品目ごとに勘定科目が異なる場合は、借方を複数行に分けること。
+4. 軽減税率8%の品目（食品・飲料等）は8%用の税区分を選ぶこと。
+5. インボイス番号がない場合、仕入税額控除の対象外となる可能性があるため、税区分の選択に注意すること。
+6. 摘要は「取引先名 品目」の形式で、事務所の税理士が見て一目でわかるように書くこと。
+7. 事業用かプライベートかは、取引先名・品目・業種から総合的に判断すること。
+8. プライベートと判断した場合は、借方を「事業主貸」にすること。
+
+JSONのみを返してください。`;
+
+    const result = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: prompt,
+    });
+
+    const text = result.text ?? '';
+
+    const jsonMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/) || text.match(/\{[\s\S]*\}/);
+    const jsonText = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : text;
+
+    const generated = JSON.parse(jsonText);
+
+    const lines: GeneratedJournalLine[] = (generated.lines || []).map((line: any, idx: number) => ({
+      line_number: line.line_number ?? idx + 1,
+      debit_credit: line.debit_credit || 'debit',
+      account_item_name: line.account_item_name || '雑費',
+      tax_category_name: line.tax_category_name || null,
+      amount: Number(line.amount) || 0,
+      tax_rate: line.tax_rate ?? null,
+      tax_amount: line.tax_amount != null ? Number(line.tax_amount) : null,
+      description: line.description || '',
+    }));
+
+    if (lines.length === 0) {
+      lines.push(
+        {
+          line_number: 1,
+          debit_credit: 'debit',
+          account_item_name: '雑費',
+          tax_category_name: input.tax_amount ? '課対仕入10%' : null,
+          amount: input.amount,
+          tax_rate: input.tax_amount ? 0.10 : null,
+          tax_amount: input.tax_amount,
+          description: `${input.supplier}`,
+        },
+        {
+          line_number: 2,
+          debit_credit: 'credit',
+          account_item_name: input.payment_method === 'credit_card' ? '未払金' : '現金',
+          tax_category_name: null,
+          amount: input.amount,
+          tax_rate: null,
+          tax_amount: null,
+          description: `${input.supplier}`,
+        }
+      );
+    }
+
+    return {
+      category: generated.category || '事業用',
+      notes: generated.notes || `${input.supplier}`,
+      confidence: generated.confidence ?? 0.7,
+      reasoning: generated.reasoning || '自動判定',
+      lines,
+    };
+  } catch (error) {
+    console.error('仕訳生成エラー:', error);
+
+    return {
+      category: '事業用',
+      notes: `${input.supplier}`,
+      confidence: 0.3,
+      reasoning: `AI判定失敗 - デフォルト値を使用（${error instanceof Error ? error.message : String(error)}）`,
+      lines: [
+        {
+          line_number: 1,
+          debit_credit: 'debit',
+          account_item_name: '雑費',
+          tax_category_name: input.tax_amount ? '課対仕入10%' : null,
+          amount: input.amount,
+          tax_rate: input.tax_amount ? 0.10 : null,
+          tax_amount: input.tax_amount,
+          description: `${input.supplier}`,
+        },
+        {
+          line_number: 2,
+          debit_credit: 'credit',
+          account_item_name: input.payment_method === 'credit_card' ? '未払金' : '現金',
+          tax_category_name: null,
+          amount: input.amount,
+          tax_rate: null,
+          tax_amount: null,
+          description: `${input.supplier}`,
+        },
+      ],
+    };
+  }
+}
+
+// ============================================
+// ユーティリティ: AI出力の名前 → DB UUID マッピング
+// ============================================
+
+export function mapLinesToDBFormat(
+  lines: GeneratedJournalLine[],
+  accountItems: AccountItemRef[],
+  taxCategories: TaxCategoryRef[],
+  fallbackAccountId: string // 「雑費」のUUIDを呼び出し元から渡す
+): Array<{
+  line_number: number;
+  debit_credit: 'debit' | 'credit';
+  account_item_id: string;
+  tax_category_id: string | null;
+  amount: number;
+  tax_rate: number | null;
+  tax_amount: number | null;
+  description: string | null;
+}> {
+  return lines.map((line) => {
+    // 勘定科目名で検索（完全一致 → 部分一致フォールバック）
+    const account =
+      accountItems.find((a) => a.name === line.account_item_name) ||
+      accountItems.find((a) =>
+        line.account_item_name.includes(a.name) || a.name.includes(line.account_item_name)
+      );
+
+    // 税区分名で検索
+    const taxCategory = line.tax_category_name
+      ? taxCategories.find((t) => t.name === line.tax_category_name) ||
+        taxCategories.find((t) =>
+          line.tax_category_name!.includes(t.name) || t.name.includes(line.tax_category_name!)
+        )
+      : null;
+
+    if (!account) {
+      console.warn(`勘定科目が見つかりません: "${line.account_item_name}" → 雑費にフォールバック`);
+    }
+
+    return {
+      line_number: line.line_number,
+      debit_credit: line.debit_credit,
+      account_item_id: account?.id || fallbackAccountId,
+      tax_category_id: taxCategory?.id || null,
+      amount: line.amount,
+      tax_rate: line.tax_rate,
+      tax_amount: line.tax_amount,
+      description: line.description || null,
+    };
+  });
+}
+
+// ============================================
+// freee連携サービス（スタブ）
+// ============================================
+
+export interface FreeeTransaction {
+  issue_date: string;
+  type: 'income' | 'expense';
+  amount: number;
+  description: string;
+  account_item_id: number;
+  tax_code: number;
+}
+
+export async function exportToFreee(transactions: FreeeTransaction[]): Promise<{
+  success: boolean;
+  message: string;
+  exported_count: number;
+}> {
+  // TODO: 実際のfreee API連携を実装
+  console.log('freeeエクスポート（スタブ）:', transactions.length, '件');
+
+  return {
+    success: true,
+    message: 'freee連携は実装予定です',
+    exported_count: transactions.length,
+  };
 }
