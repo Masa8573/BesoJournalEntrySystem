@@ -230,26 +230,43 @@ export default function ReviewPage() {
 
     // ルール追加
     if (addRule && form.accountItemId) {
-      const ruleData = {
-        rule_name: `${form.description || item.supplierName || '不明'} → 自動仕訳`,
-        priority: 100,
-        rule_type: '支出' as const,
-        scope: ruleIndustryId ? 'industry' as const : 'shared' as const,
-        industry_id: ruleIndustryId || null,
-        conditions: {
-          supplier_pattern: item.supplierName || null,
-        },
-        actions: {
-          account_item_id: form.accountItemId || null,
-          tax_category_id: form.taxCategoryId || null,
-          description_template: form.description || null,
-        },
-        auto_apply: true,
-        require_confirmation: false,
-        is_active: true,
-      };
-      const { error } = await supabase.from('processing_rules').insert([ruleData]);
-      if (error) console.error('ルール追加エラー:', error);
+      // RLS対応: ログインユーザーのorganization_idを取得
+      const { data: { user } } = await supabase.auth.getUser();
+      let orgId: string | null = null;
+      if (user) {
+        const { data: userData } = await supabase
+          .from('users')
+          .select('organization_id')
+          .eq('id', user.id)
+          .single();
+        orgId = userData?.organization_id ?? null;
+      }
+
+      if (!orgId) {
+        console.error('ルール追加エラー: organization_id を取得できません');
+      } else {
+        const ruleData = {
+          organization_id: orgId,
+          rule_name: `${form.description || item.supplierName || '不明'} → 自動仕訳`,
+          priority: 100,
+          rule_type: '支出' as const,
+          scope: ruleIndustryId ? 'industry' as const : 'shared' as const,
+          industry_id: ruleIndustryId || null,
+          conditions: {
+            supplier_pattern: item.supplierName || null,
+          },
+          actions: {
+            account_item_id: form.accountItemId || null,
+            tax_category_id: form.taxCategoryId || null,
+            description_template: form.description || null,
+          },
+          auto_apply: true,
+          require_confirmation: false,
+          is_active: true,
+        };
+        const { error } = await supabase.from('processing_rules').insert([ruleData]);
+        if (error) console.error('ルール追加エラー:', error);
+      }
     }
 
     setItems(prev => prev.map((it, i) => i === currentIndex ? { ...it, ...form } as DocumentWithEntry : it));

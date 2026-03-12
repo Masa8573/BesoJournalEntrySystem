@@ -90,8 +90,8 @@ export default function AiCheckPage() {
         id, client_id, document_id, entry_date, description, status, notes, ai_confidence, ai_generated, requires_review,
         journal_entry_lines (
           id, line_number, debit_credit, account_item_id, tax_category_id, amount, description,
-          account_item:account_items!journal_entry_lines_account_item_id_fkey(id, name),
-          tax_category:tax_categories!journal_entry_lines_tax_category_id_fkey(id, name)
+          account_item:account_items(id, name),
+          tax_category:tax_categories(id, name)
         )
       `)
       .eq('client_id', clientId)

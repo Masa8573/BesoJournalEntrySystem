@@ -185,8 +185,8 @@ export default function ExportPage() {
         id, entry_date, description, status, is_excluded, supplier_id,
         lines:journal_entry_lines(
           id, line_number, debit_credit, account_item_id, tax_category_id, amount, tax_rate, tax_amount, description,
-          account_item:account_items!journal_entry_lines_account_item_id_fkey(id, name),
-          tax_category:tax_categories!journal_entry_lines_tax_category_id_fkey(id, name)
+          account_item:account_items(id, name),
+          tax_category:tax_categories(id, name)
         )
       `)
       .eq('client_id', clientId)
