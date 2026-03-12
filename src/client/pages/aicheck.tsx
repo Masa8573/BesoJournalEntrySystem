@@ -83,7 +83,11 @@ export default function AiCheckPage() {
       return;
     }
 
-    // journal_entries + lines を取得（draft ステータス、document_id でフィルタ）
+    // -------------------------------------------------------
+    // 修正: FK ヒント名を削除（PostgREST が自動解決可能）
+    // 旧: account_item:account_items!journal_entry_lines_account_item_id_fkey(...)
+    // 新: account_item:account_items(...)
+    // -------------------------------------------------------
     const { data: entriesData, error } = await supabase
       .from('journal_entries')
       .select(`

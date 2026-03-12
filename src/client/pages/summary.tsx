@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Plus, Upload, FileOutput, FileX, ArrowLeft, Building2, Receipt, Calendar, CheckCircle, Clock, AlertCircle } from 'lucide-react';
 import { supabase } from '@/client/lib/supabase';
-import { useWorkflow } from '@/client/context/WorkflowContext';
 import type { Client, Industry } from '@/types';
 
 interface WorkflowLog {
@@ -18,6 +17,21 @@ interface WorkflowLog {
   };
   created_at: string;
   updated_at: string;
+  // -------------------------------------------------------
+  // 追加: ワークフローごとの仕訳集計を保持
+  // -------------------------------------------------------
+  entryStats?: {
+    total: number;
+    approved: number;
+    excluded: number;
+    draft: number;
+    totalAmount: number;
+  };
+  // ドキュメントの日付範囲（取引日）
+  dateRange?: {
+    earliest: string | null;
+    latest: string | null;
+  };
 }
 
 interface ClientDetail extends Client {
@@ -31,10 +45,14 @@ function formatSales(amount: number | null): string {
   return `¥${amount.toLocaleString()}`;
 }
 
+function formatCurrency(amount: number | null | undefined): string {
+  if (!amount && amount !== 0) return '-';
+  return `¥${Number(amount).toLocaleString()}`;
+}
+
 export default function SummaryPage() {
   const { id: clientId } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { startWorkflow } = useWorkflow();
   const [client, setClient] = useState<ClientDetail | null>(null);
   const [workflows, setWorkflows] = useState<WorkflowLog[]>([]);
   const [loading, setLoading] = useState(true);
@@ -51,7 +69,65 @@ export default function SummaryPage() {
     ]);
 
     if (clientRes.data) setClient(clientRes.data as ClientDetail);
-    if (wfRes.data) setWorkflows(wfRes.data as WorkflowLog[]);
+
+    if (wfRes.data) {
+      // 各ワークフローの仕訳集計を取得
+      const wfList = wfRes.data as WorkflowLog[];
+      const enriched = await Promise.all(
+        wfList.map(async (wf) => {
+          // ワークフローに紐づくドキュメントIDを取得
+          const { data: docs } = await supabase
+            .from('documents')
+            .select('id, document_date')
+            .eq('workflow_id', wf.id)
+            .eq('client_id', cid);
+
+          const docIds = docs?.map((d: any) => d.id) || [];
+
+          // 取引日の日付範囲を計算
+          const dates = docs
+            ?.map((d: any) => d.document_date)
+            .filter(Boolean)
+            .sort() || [];
+
+          const dateRange = {
+            earliest: dates.length > 0 ? dates[0] : null,
+            latest: dates.length > 0 ? dates[dates.length - 1] : null,
+          };
+
+          if (docIds.length === 0) {
+            return { ...wf, entryStats: { total: 0, approved: 0, excluded: 0, draft: 0, totalAmount: 0 }, dateRange };
+          }
+
+          // 仕訳集計を取得
+          const { data: entries } = await supabase
+            .from('journal_entries')
+            .select('id, status, is_excluded, journal_entry_lines(amount, debit_credit)')
+            .eq('client_id', cid)
+            .in('document_id', docIds);
+
+          const total = entries?.length || 0;
+          const approved = entries?.filter((e: any) => e.status === 'approved').length || 0;
+          const excluded = entries?.filter((e: any) => e.is_excluded).length || 0;
+          const draft = entries?.filter((e: any) => e.status === 'draft').length || 0;
+
+          // 借方合計金額を計算
+          const totalAmount = entries?.reduce((sum: number, e: any) => {
+            const debitLine = e.journal_entry_lines?.find((l: any) => l.debit_credit === 'debit');
+            return sum + (debitLine?.amount || 0);
+          }, 0) || 0;
+
+          return {
+            ...wf,
+            entryStats: { total, approved, excluded, draft, totalAmount },
+            dateRange,
+          };
+        })
+      );
+
+      setWorkflows(enriched);
+    }
+
     setLoading(false);
   };
 
@@ -68,9 +144,16 @@ export default function SummaryPage() {
 
   const getDocumentCount = (wf: WorkflowLog) => wf.data?.uploaded_document_ids?.length ?? 0;
 
-  const formatPeriod = (wf: WorkflowLog) => {
-    const d = new Date(wf.created_at);
-    return `${d.getFullYear()}年${d.getMonth() + 1}月`;
+  // -------------------------------------------------------
+  // 取引日範囲をフォーマット
+  // -------------------------------------------------------
+  const formatDateRange = (dateRange?: WorkflowLog['dateRange']) => {
+    if (!dateRange?.earliest) return '-';
+    const fmt = (d: string) => new Date(d).toLocaleDateString('ja-JP', { month: 'short', day: 'numeric' });
+    if (dateRange.earliest === dateRange.latest || !dateRange.latest) {
+      return fmt(dateRange.earliest);
+    }
+    return `${fmt(dateRange.earliest)} 〜 ${fmt(dateRange.latest)}`;
   };
 
   if (loading) {
@@ -103,7 +186,7 @@ export default function SummaryPage() {
           <p className="text-sm text-gray-500 mt-0.5">顧客詳細・業務ログ</p>
         </div>
         <button
-          onClick={() => client && clientId && startWorkflow(clientId, client.name)}
+          onClick={() => navigate(`/upload?client_id=${clientId}`)}
           className="flex items-center gap-2 btn-primary"
         >
           <Plus size={18} />新規ワークフロー開始
@@ -151,19 +234,10 @@ export default function SummaryPage() {
 
       {/* クイックアクション */}
       <div className="grid grid-cols-3 gap-4">
-        <button
-          onClick={() => client && clientId && startWorkflow(clientId, client.name)}
-          className="flex items-center gap-3 p-4 rounded-lg border transition-colors text-blue-600 bg-blue-50 hover:bg-blue-100 border-blue-200"
-        >
-          <Upload size={20} />
-          <div className="text-left">
-            <p className="text-sm font-semibold">新規フロー開始</p>
-            <p className="text-xs opacity-75">証憑をアップロード</p>
-          </div>
-        </button>
         {[
-          { icon: <FileOutput size={20} />, label: 'エクスポート', desc: 'freeeに出力', href: `/clients/${clientId}/export`, color: 'text-green-600 bg-green-50 hover:bg-green-100 border-green-200' },
-          { icon: <FileX size={20} />, label: '対象外証憑', desc: '除外された証憑', href: `/clients/${clientId}/excluded`, color: 'text-red-600 bg-red-50 hover:bg-red-100 border-red-200' },
+          { icon: <Upload size={20} />, label: 'アップロード', desc: '証憑をアップロード', href: `/upload?client_id=${clientId}`, color: 'text-blue-600 bg-blue-50 hover:bg-blue-100 border-blue-200' },
+          { icon: <FileOutput size={20} />, label: 'エクスポート', desc: 'freeeに出力', href: `/export?client_id=${clientId}`, color: 'text-green-600 bg-green-50 hover:bg-green-100 border-green-200' },
+          { icon: <FileX size={20} />, label: '対象外証憑', desc: '除外された証憑', href: `/excluded?client_id=${clientId}`, color: 'text-red-600 bg-red-50 hover:bg-red-100 border-red-200' },
         ].map(item => (
           <Link
             key={item.label}
@@ -191,7 +265,7 @@ export default function SummaryPage() {
             <Calendar size={40} className="mx-auto mb-3 text-gray-300" />
             <p className="text-sm">まだ処理履歴がありません</p>
             <button
-              onClick={() => client && clientId && startWorkflow(clientId, client.name)}
+              onClick={() => navigate(`/upload?client_id=${clientId}`)}
               className="mt-4 btn-primary text-sm"
             >
               最初のワークフローを開始する
@@ -202,32 +276,60 @@ export default function SummaryPage() {
             <table className="w-full">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">期間</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">開始日</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">取引日</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">処理日</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">完了日</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">証憑数</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">仕訳</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">金額合計</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">現在ステップ</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">ステータス</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
-                {workflows.map((wf, idx) => (
+                {workflows.map((wf) => (
                   <tr key={wf.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-sm font-medium text-gray-900">
-                      {formatPeriod(wf)} 第{workflows.length - idx}回
+                    {/* 取引日（証憑の日付範囲） */}
+                    <td className="px-4 py-3 text-sm text-gray-900 font-medium">
+                      {formatDateRange(wf.dateRange)}
                     </td>
+                    {/* 処理日（ワークフロー開始日） */}
                     <td className="px-4 py-3 text-sm text-gray-600">
                       {new Date(wf.created_at).toLocaleDateString('ja-JP')}
                     </td>
+                    {/* 完了日 */}
                     <td className="px-4 py-3 text-sm text-gray-600">
                       {wf.status === 'completed' ? new Date(wf.updated_at).toLocaleDateString('ja-JP') : '-'}
                     </td>
+                    {/* 証憑数 */}
                     <td className="px-4 py-3 text-sm text-gray-900">
                       {getDocumentCount(wf)}件
                     </td>
+                    {/* 仕訳数（承認済み / 全件） */}
+                    <td className="px-4 py-3 text-sm">
+                      {wf.entryStats ? (
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-medium text-gray-900">{wf.entryStats.approved}</span>
+                          <span className="text-gray-400">/</span>
+                          <span className="text-gray-500">{wf.entryStats.total}件</span>
+                          {wf.entryStats.excluded > 0 && (
+                            <span className="text-xs text-red-500 ml-1">除外{wf.entryStats.excluded}</span>
+                          )}
+                          {wf.entryStats.draft > 0 && (
+                            <span className="text-xs text-yellow-600 ml-1">下書{wf.entryStats.draft}</span>
+                          )}
+                        </div>
+                      ) : '-'}
+                    </td>
+                    {/* 金額合計 */}
+                    <td className="px-4 py-3 text-sm font-medium text-gray-900">
+                      {wf.entryStats ? formatCurrency(wf.entryStats.totalAmount) : '-'}
+                    </td>
+                    {/* 現在ステップ */}
                     <td className="px-4 py-3 text-sm text-gray-600">
                       {getStepName(wf.current_step)}
                     </td>
+                    {/* ステータス */}
                     <td className="px-4 py-3">
                       {getStatusBadge(wf)}
                     </td>

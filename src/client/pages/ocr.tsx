@@ -73,6 +73,22 @@ export default function OCRPage() {
   // 同時並列数（Gemini API レート制限を考慮: 3.1 Flash は RPM が高い）
   const CONCURRENCY = 5;
 
+  // -------------------------------------------------------
+  // ヘルパー: client_id → organization_id を解決
+  // -------------------------------------------------------
+  const resolveOrganizationId = async (clientId: string): Promise<string | null> => {
+    const { data, error } = await supabase
+      .from('clients')
+      .select('organization_id')
+      .eq('id', clientId)
+      .single();
+    if (error || !data) {
+      console.error('organization_id 取得エラー:', error);
+      return null;
+    }
+    return data.organization_id;
+  };
+
   /** 1件分の OCR → 仕訳生成 → DB保存 処理 */
   const processOneDocument = async (result: OCRResult) => {
     // 処理中に更新
@@ -140,10 +156,20 @@ export default function OCRPage() {
       const journalData = await journalResponse.json();
       const journalEntry = journalData.journal_entry;
 
+      // -------------------------------------------------------
+      // 修正: organization_id を取得して INSERT に含める
+      // RLS が organization_id = get_my_organization_id() をチェックするため必須
+      // -------------------------------------------------------
+      const organizationId = await resolveOrganizationId(currentWorkflow!.clientId);
+      if (!organizationId) {
+        throw new Error('organization_id の取得に失敗しました。クライアント設定を確認してください。');
+      }
+
       // STEP 5: 仕訳ヘッダーを journal_entries テーブルに保存
       const { data: savedEntry, error: dbSaveError } = await supabase
         .from('journal_entries')
         .insert({
+          organization_id: organizationId,       // ← 追加
           client_id: currentWorkflow!.clientId,
           document_id: result.documentId,
           entry_date: journalEntry.entry_date || ocrResult.extracted_date,
@@ -159,6 +185,7 @@ export default function OCRPage() {
 
       if (dbSaveError) {
         console.error('仕訳ヘッダー保存エラー:', dbSaveError);
+        throw new Error(`仕訳ヘッダー保存エラー: ${dbSaveError.message}`);
       }
 
       // STEP 5b: 仕訳明細行を journal_entry_lines テーブルに保存
@@ -393,7 +420,7 @@ export default function OCRPage() {
             </div>
           )}
 
-          {/* 処理状況（信頼度パーセント削除、処理中/完了のステータスのみ） */}
+          {/* 処理状況 */}
           {ocrResults.length > 0 && (
             <div className="card">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">処理状況</h2>

@@ -69,7 +69,6 @@ export default function ReviewPage() {
 
   // ルール追加
   const [addRule, setAddRule] = useState(false);
-  const [ruleScope, setRuleScope] = useState<'shared' | 'industry' | 'client'>('shared');
   const [ruleIndustryId, setRuleIndustryId] = useState('');
 
   // ============================================
@@ -95,9 +94,9 @@ export default function ReviewPage() {
 
     if (!docs || docs.length === 0) { setLoading(false); return; }
 
-    // 2. journal_entries (document_id IN)
+    // 2. journal_entries (document_id IN) — FK ヒント名を削除して安全にJOIN
     const docIds = docs.map((d: any) => d.id);
-    const { data: entries } = await supabase
+    const { data: entries, error: entriesError } = await supabase
       .from('journal_entries')
       .select(`
         id, entry_date, description, status, is_excluded, ai_confidence,
@@ -109,6 +108,10 @@ export default function ReviewPage() {
       .eq('client_id', clientId)
       .in('document_id', docIds)
       .in('status', ['draft', 'pending', 'approved']);
+
+    if (entriesError) {
+      console.error('仕訳取得エラー (review):', entriesError);
+    }
 
     // 3. マージ
     const merged: DocumentWithEntry[] = await Promise.all(
@@ -132,6 +135,10 @@ export default function ReviewPage() {
           documentDate: doc.document_date,
           amount: doc.amount,
           taxAmount: doc.tax_amount,
+          // -------------------------------------------------------
+          // 修正: journal_entry がある場合はそのデータ、
+          //       なければ OCR(documents) のデータで初期値を設定
+          // -------------------------------------------------------
           entryId: entry?.id || null,
           entryDate: entry?.entry_date || doc.document_date || new Date().toISOString().split('T')[0],
           description: entry?.description || doc.supplier_name || '',
@@ -200,7 +207,6 @@ export default function ReviewPage() {
     setForm({ ...items[nextIndex] });
     setSavedAt(null);
     setAddRule(false);
-    setRuleScope('shared');
     setRuleIndustryId('');
   };
 
@@ -209,75 +215,120 @@ export default function ReviewPage() {
   // ============================================
   const saveCurrentItem = async () => {
     const item = items[currentIndex];
-    if (!item || !form.entryId) return;
+    if (!item) return;
     setSaving(true);
 
-    // journal_entries 更新
-    await supabase.from('journal_entries').update({
-      entry_date: form.entryDate,
-      description: form.description,
-      is_excluded: form.isExcluded,
-      status: form.isExcluded ? 'draft' : 'approved',
-    }).eq('id', form.entryId);
+    // -------------------------------------------------------
+    // 修正: entryId が無い場合（journal_entry が未生成）は
+    //       新規 INSERT してから保存する
+    // -------------------------------------------------------
+    let entryId = form.entryId;
 
-    // journal_entry_lines 更新
-    if (form.lineId) {
-      await supabase.from('journal_entry_lines').update({
-        account_item_id: form.accountItemId || null,
-        tax_category_id: form.taxCategoryId || null,
-        tax_rate: form.taxRate || null,
-        amount: form.lineAmount,
-      }).eq('id', form.lineId);
+    if (!entryId) {
+      // organization_id を取得
+      const { data: clientData } = await supabase
+        .from('clients')
+        .select('organization_id')
+        .eq('id', currentWorkflow!.clientId)
+        .single();
+
+      if (!clientData?.organization_id) {
+        console.error('organization_id が取得できませんでした');
+        setSaving(false);
+        return;
+      }
+
+      // 新規 journal_entry を作成
+      const { data: newEntry, error: insertError } = await supabase
+        .from('journal_entries')
+        .insert({
+          organization_id: clientData.organization_id,
+          client_id: currentWorkflow!.clientId,
+          document_id: item.docId,
+          entry_date: form.entryDate || new Date().toISOString().split('T')[0],
+          entry_type: 'normal',
+          description: form.description || '',
+          status: form.isExcluded ? 'draft' : 'approved',
+          is_excluded: form.isExcluded || false,
+          ai_generated: false,
+        })
+        .select()
+        .single();
+
+      if (insertError || !newEntry) {
+        console.error('仕訳新規作成エラー:', insertError);
+        setSaving(false);
+        return;
+      }
+
+      entryId = newEntry.id;
+
+      // 借方明細行を作成
+      const { data: newLine, error: lineInsertError } = await supabase
+        .from('journal_entry_lines')
+        .insert({
+          journal_entry_id: entryId,
+          line_number: 1,
+          debit_credit: 'debit',
+          account_item_id: form.accountItemId || null,
+          tax_category_id: form.taxCategoryId || null,
+          tax_rate: form.taxRate || null,
+          amount: form.lineAmount || 0,
+        })
+        .select()
+        .single();
+
+      if (lineInsertError) {
+        console.error('明細行新規作成エラー:', lineInsertError);
+      }
+
+      // form state を更新
+      setForm(p => ({ ...p, entryId, lineId: newLine?.id || null }));
+    } else {
+      // 既存の journal_entries を更新
+      await supabase.from('journal_entries').update({
+        entry_date: form.entryDate,
+        description: form.description,
+        is_excluded: form.isExcluded,
+        status: form.isExcluded ? 'draft' : 'approved',
+      }).eq('id', entryId);
+
+      // journal_entry_lines 更新
+      if (form.lineId) {
+        await supabase.from('journal_entry_lines').update({
+          account_item_id: form.accountItemId || null,
+          tax_category_id: form.taxCategoryId || null,
+          tax_rate: form.taxRate || null,
+          amount: form.lineAmount,
+        }).eq('id', form.lineId);
+      }
     }
 
     // ルール追加
     if (addRule && form.accountItemId) {
-      // RLS対応: ログインユーザーのorganization_idを取得
-      const { data: { user } } = await supabase.auth.getUser();
-      let orgId: string | null = null;
-      if (user) {
-        const { data: userData } = await supabase
-          .from('users')
-          .select('organization_id')
-          .eq('id', user.id)
-          .single();
-        orgId = userData?.organization_id ?? null;
-      }
-
-      if (!orgId) {
-        console.error('ルール追加エラー: organization_id を取得できません');
-      } else {
-        // scope判定: client > industry > shared
-        const scope = ruleScope === 'client' ? 'client' as const
-          : ruleScope === 'industry' ? 'industry' as const
-          : 'shared' as const;
-
-        const ruleData = {
-          organization_id: orgId,
-          rule_name: `${form.description || item.supplierName || '不明'} → 自動仕訳`,
-          priority: scope === 'client' ? 200 : scope === 'industry' ? 150 : 100,
-          rule_type: '支出' as const,
-          scope,
-          industry_id: scope === 'industry' ? ruleIndustryId || null : null,
-          client_id: scope === 'client' ? currentWorkflow?.clientId || null : null,
-          conditions: {
-            supplier_pattern: item.supplierName || null,
-          },
-          actions: {
-            account_item_id: form.accountItemId || null,
-            tax_category_id: form.taxCategoryId || null,
-            description_template: form.description || null,
-          },
-          auto_apply: true,
-          require_confirmation: false,
-          is_active: true,
-        };
-        const { error } = await supabase.from('processing_rules').insert([ruleData]);
-        if (error) console.error('ルール追加エラー:', error);
-      }
+      const ruleData = {
+        rule_name: `${form.description || item.supplierName || '不明'} → 自動仕訳`,
+        priority: 100,
+        rule_type: '支出' as const,
+        scope: ruleIndustryId ? 'industry' as const : 'shared' as const,
+        industry_id: ruleIndustryId || null,
+        conditions: {
+          supplier_pattern: item.supplierName || null,
+        },
+        actions: {
+          account_item_id: form.accountItemId || null,
+          tax_category_id: form.taxCategoryId || null,
+          description_template: form.description || null,
+        },
+        auto_apply: true,
+        require_confirmation: false,
+        is_active: true,
+      };
+      const { error } = await supabase.from('processing_rules').insert([ruleData]);
+      if (error) console.error('ルール追加エラー:', error);
     }
 
-    setItems(prev => prev.map((it, i) => i === currentIndex ? { ...it, ...form } as DocumentWithEntry : it));
+    setItems(prev => prev.map((it, i) => i === currentIndex ? { ...it, ...form, entryId } as DocumentWithEntry : it));
     setSaving(false);
     setSavedAt(new Date().toLocaleTimeString('ja-JP'));
   };
@@ -436,11 +487,19 @@ export default function ReviewPage() {
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col overflow-hidden">
           <div className="p-3 border-b border-gray-100 flex items-center justify-between flex-shrink-0">
             <h2 className="font-bold text-sm">仕訳データ</h2>
-            {currentItem.aiConfidence != null && (
-              <span className={`text-xs px-2 py-0.5 rounded-full ${
-                currentItem.aiConfidence >= 0.8 ? 'bg-green-50 text-green-600' : currentItem.aiConfidence >= 0.5 ? 'bg-yellow-50 text-yellow-600' : 'bg-red-50 text-red-600'
-              }`}>AI信頼度 {Math.round(currentItem.aiConfidence * 100)}%</span>
-            )}
+            <div className="flex items-center gap-2">
+              {/* OCR読取情報バッジ */}
+              {currentItem.supplierName && (
+                <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">
+                  OCR: {currentItem.supplierName}
+                </span>
+              )}
+              {currentItem.aiConfidence != null && (
+                <span className={`text-xs px-2 py-0.5 rounded-full ${
+                  currentItem.aiConfidence >= 0.8 ? 'bg-green-50 text-green-600' : currentItem.aiConfidence >= 0.5 ? 'bg-yellow-50 text-yellow-600' : 'bg-red-50 text-red-600'
+                }`}>AI信頼度 {Math.round(currentItem.aiConfidence * 100)}%</span>
+              )}
+            </div>
           </div>
 
           <div className="flex-1 p-4 flex flex-col gap-3 overflow-y-auto">
@@ -448,6 +507,39 @@ export default function ReviewPage() {
             {form.isExcluded && (
               <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700 flex items-center gap-2">
                 <Ban size={16} />この証憑は対象外に設定されています
+              </div>
+            )}
+
+            {/* OCR読取結果サマリー（参考情報） */}
+            {(currentItem.supplierName || currentItem.amount || currentItem.documentDate) && (
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-1">
+                <p className="text-xs font-medium text-slate-500 mb-1">OCR読取結果（参考）</p>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  {currentItem.supplierName && (
+                    <div>
+                      <span className="text-slate-400">取引先:</span>
+                      <span className="ml-1 font-medium text-slate-700">{currentItem.supplierName}</span>
+                    </div>
+                  )}
+                  {currentItem.amount != null && (
+                    <div>
+                      <span className="text-slate-400">金額:</span>
+                      <span className="ml-1 font-medium text-slate-700">¥{Number(currentItem.amount).toLocaleString()}</span>
+                    </div>
+                  )}
+                  {currentItem.documentDate && (
+                    <div>
+                      <span className="text-slate-400">日付:</span>
+                      <span className="ml-1 font-medium text-slate-700">{new Date(currentItem.documentDate).toLocaleDateString('ja-JP')}</span>
+                    </div>
+                  )}
+                  {currentItem.taxAmount != null && (
+                    <div>
+                      <span className="text-slate-400">税額:</span>
+                      <span className="ml-1 font-medium text-slate-700">¥{Number(currentItem.taxAmount).toLocaleString()}</span>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
@@ -561,34 +653,19 @@ export default function ReviewPage() {
                 </button>
               </div>
 
-              {/* ルール追加チェックボックス + スコープ選択 */}
-              <div className="flex items-center gap-3 flex-wrap">
+              {/* ルール追加チェックボックス + 業種セレクト */}
+              <div className="flex items-center gap-3">
                 <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="checkbox" checked={addRule} onChange={e => { setAddRule(e.target.checked); if (!e.target.checked) { setRuleScope('shared'); setRuleIndustryId(''); } }}
+                  <input type="checkbox" checked={addRule} onChange={e => setAddRule(e.target.checked)}
                     className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
                   <span className="text-sm text-gray-700">ルール追加</span>
                 </label>
                 {addRule && (
-                  <>
-                    <select value={ruleScope} onChange={e => { setRuleScope(e.target.value as any); setRuleIndustryId(''); }}
-                      className="border border-gray-300 rounded-md p-1.5 text-sm bg-white">
-                      <option value="shared">共通ルール</option>
-                      <option value="industry">業種別</option>
-                      <option value="client">この顧客専用</option>
-                    </select>
-                    {ruleScope === 'industry' && (
-                      <select value={ruleIndustryId} onChange={e => setRuleIndustryId(e.target.value)}
-                        className="border border-gray-300 rounded-md p-1.5 text-sm bg-white">
-                        <option value="">業種を選択</option>
-                        {industries.map(ind => <option key={ind.id} value={ind.id}>{ind.name}</option>)}
-                      </select>
-                    )}
-                    {ruleScope === 'client' && (
-                      <span className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded">
-                        {currentWorkflow?.clientName || '現在の顧客'} 専用ルール
-                      </span>
-                    )}
-                  </>
+                  <select value={ruleIndustryId} onChange={e => setRuleIndustryId(e.target.value)}
+                    className="border border-gray-300 rounded-md p-1.5 text-sm bg-white">
+                    <option value="">共通ルール</option>
+                    {industries.map(ind => <option key={ind.id} value={ind.id}>{ind.name}</option>)}
+                  </select>
                 )}
               </div>
             </div>
