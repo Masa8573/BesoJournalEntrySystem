@@ -55,16 +55,17 @@ function Sidebar() {
   const workflowPath = (slug: string) =>
     activeClientId ? `/clients/${activeClientId}/${slug}` : '#';
 
-  // ワークフロー系リンク群
-  const workflowItems = [
-    { label: '証憑アップロード', icon: <Upload size={18} />, path: workflowPath('upload') },
-    { label: 'OCR処理',         icon: <Scan size={18} />,     path: workflowPath('ocr') },
-    { label: 'AIチェック',       icon: <CheckSquare size={18} />, path: workflowPath('aicheck') },
-    { label: '仕訳確認',         icon: <Eye size={18} />,      path: workflowPath('review') },
-    { label: '仕訳出力',         icon: <Download size={18} />, path: workflowPath('export') },
-    { label: '集計・チェック',    icon: <BarChart3 size={18} />, path: workflowPath('summary') },
-    { label: '対象外証憑',       icon: <FileX size={18} />,    path: workflowPath('excluded') },
-  ];
+  // -------------------------------------------------------
+  // メニュー順序変更:
+  //   顧客一覧
+  //   └ 集計・チェック
+  //     └ 対象外証憑
+  //   └ 証憑アップロード
+  //   └ OCR処理
+  //   └ AIチェック
+  //   └ 仕訳確認
+  //   └ 仕訳出力
+  // -------------------------------------------------------
 
   // マスタ管理リンク群
   const masterItems = [
@@ -75,6 +76,21 @@ function Sidebar() {
     { label: '業種管理',           icon: <Briefcase size={18} />, path: '/master/industries' },
     { label: '取引先管理',         icon: <Store size={18} />,    path: '/master/suppliers' },
     { label: 'ユーザー権限管理',   icon: <User size={18} />,     path: '/settings' },
+  ];
+
+  // 集計・チェックのパス
+  const summaryPath = workflowPath('summary');
+  const excludedPath = workflowPath('excluded');
+  const summaryActive = isActive(summaryPath);
+  const excludedActive = isActive(excludedPath);
+
+  // ワークフロー処理系メニュー（集計・対象外を除く）
+  const workflowProcessItems = [
+    { label: '証憑アップロード', icon: <Upload size={18} />,      path: workflowPath('upload') },
+    { label: 'OCR処理',         icon: <Scan size={18} />,         path: workflowPath('ocr') },
+    { label: 'AIチェック',       icon: <CheckSquare size={18} />, path: workflowPath('aicheck') },
+    { label: '仕訳確認',         icon: <Eye size={18} />,          path: workflowPath('review') },
+    { label: '仕訳出力',         icon: <Download size={18} />,     path: workflowPath('export') },
   ];
 
   return (
@@ -104,7 +120,8 @@ function Sidebar() {
 
           {expandedSections['業務'] && (
             <div className="mt-1 space-y-1">
-              {/* 顧客一覧 */}
+
+              {/* ① 顧客一覧 */}
               <Link
                 to="/clients"
                 className={`flex items-center gap-2 px-3 py-2 ml-2 text-sm rounded-md transition-colors ${
@@ -121,7 +138,55 @@ function Sidebar() {
 
               {/* ワークフロー系サブメニュー */}
               <div className="mt-1 ml-4 border-l-2 border-gray-200 space-y-0.5">
-                {workflowItems.map((item) => {
+
+                {/* ② 集計・チェック */}
+                {(() => {
+                  const disabled = summaryPath === '#';
+                  return (
+                    <Link
+                      to={summaryPath}
+                      onClick={(e) => { if (disabled) e.preventDefault(); }}
+                      className={`flex items-center gap-2 px-3 py-1.5 ml-2 text-sm rounded-md transition-colors ${
+                        disabled
+                          ? 'text-gray-400 cursor-not-allowed'
+                          : summaryActive
+                            ? 'bg-blue-50 text-blue-700 font-medium'
+                            : 'text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      <span className={summaryActive ? 'text-blue-600' : 'text-gray-400'}>
+                        <BarChart3 size={18} />
+                      </span>
+                      <span>集計・チェック</span>
+                    </Link>
+                  );
+                })()}
+
+                {/* ②-a 対象外証憑（集計の子要素） */}
+                {(() => {
+                  const disabled = excludedPath === '#';
+                  return (
+                    <Link
+                      to={excludedPath}
+                      onClick={(e) => { if (disabled) e.preventDefault(); }}
+                      className={`flex items-center gap-2 px-3 py-1.5 ml-6 text-sm rounded-md transition-colors ${
+                        disabled
+                          ? 'text-gray-400 cursor-not-allowed'
+                          : excludedActive
+                            ? 'bg-blue-50 text-blue-700 font-medium'
+                            : 'text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      <span className={excludedActive ? 'text-blue-600' : 'text-gray-400'}>
+                        <FileX size={16} />
+                      </span>
+                      <span className="text-xs">対象外証憑</span>
+                    </Link>
+                  );
+                })()}
+
+                {/* ③〜⑦ ワークフロー処理系 */}
+                {workflowProcessItems.map((item) => {
                   const active = isActive(item.path);
                   const disabled = item.path === '#';
                   return (
@@ -190,9 +255,6 @@ function Sidebar() {
 
 // ============================================================
 // ヘッダーコンポーネント
-// ・通知ベルマーク削除
-// ・青丸ユーザーアイコン削除 → テキスト表示のみ
-// ・ログアウトはドロップダウンで残す
 // ============================================================
 function Header() {
   const navigate = useNavigate();

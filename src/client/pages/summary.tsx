@@ -186,7 +186,7 @@ export default function SummaryPage() {
           <p className="text-sm text-gray-500 mt-0.5">顧客詳細・業務ログ</p>
         </div>
         <button
-          onClick={() => navigate(`/upload?client_id=${clientId}`)}
+          onClick={() => navigate(`/clients/${clientId}/upload`)}
           className="flex items-center gap-2 btn-primary"
         >
           <Plus size={18} />新規ワークフロー開始
@@ -235,9 +235,9 @@ export default function SummaryPage() {
       {/* クイックアクション */}
       <div className="grid grid-cols-3 gap-4">
         {[
-          { icon: <Upload size={20} />, label: 'アップロード', desc: '証憑をアップロード', href: `/upload?client_id=${clientId}`, color: 'text-blue-600 bg-blue-50 hover:bg-blue-100 border-blue-200' },
-          { icon: <FileOutput size={20} />, label: 'エクスポート', desc: 'freeeに出力', href: `/export?client_id=${clientId}`, color: 'text-green-600 bg-green-50 hover:bg-green-100 border-green-200' },
-          { icon: <FileX size={20} />, label: '対象外証憑', desc: '除外された証憑', href: `/excluded?client_id=${clientId}`, color: 'text-red-600 bg-red-50 hover:bg-red-100 border-red-200' },
+          { icon: <Upload size={20} />, label: 'アップロード', desc: '証憑をアップロード', href: `/clients/${clientId}/upload`, color: 'text-blue-600 bg-blue-50 hover:bg-blue-100 border-blue-200' },
+          { icon: <FileOutput size={20} />, label: 'エクスポート', desc: 'freeeに出力', href: `/clients/${clientId}/export`, color: 'text-green-600 bg-green-50 hover:bg-green-100 border-green-200' },
+          { icon: <FileX size={20} />, label: '対象外証憑', desc: '除外された証憑', href: `/clients/${clientId}/excluded`, color: 'text-red-600 bg-red-50 hover:bg-red-100 border-red-200' },
         ].map(item => (
           <Link
             key={item.label}
@@ -265,7 +265,7 @@ export default function SummaryPage() {
             <Calendar size={40} className="mx-auto mb-3 text-gray-300" />
             <p className="text-sm">まだ処理履歴がありません</p>
             <button
-              onClick={() => navigate(`/upload?client_id=${clientId}`)}
+              onClick={() => navigate(`/clients/${clientId}/upload`)}
               className="mt-4 btn-primary text-sm"
             >
               最初のワークフローを開始する
