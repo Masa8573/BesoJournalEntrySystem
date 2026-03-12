@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { Download, FileText, AlertCircle, History, Calendar } from 'lucide-react';
 import { useWorkflow } from '@/client/context/WorkflowContext';
 import { supabase } from '@/client/lib/supabase';
+import { accountItemsApi, taxCategoriesApi } from '@/client/lib/api';
 import WorkflowHeader from '@/client/components/workflow/WorkflowHeader';
 
 // ============================================
@@ -11,6 +12,7 @@ import WorkflowHeader from '@/client/components/workflow/WorkflowHeader';
 type PeriodFilter = '全期間' | '本日' | '今週' | '今月' | '先月' | 'カスタム';
 type ExcludedFilter = '全て' | '対象外除く';
 type ActiveTab = '出力' | '出力履歴';
+type DateBasis = '取引日' | '処理日';
 
 interface ExportLine {
   id: string;
@@ -22,18 +24,20 @@ interface ExportLine {
   tax_rate: number | null;
   tax_amount: number | null;
   description: string | null;
-  account_item: { id: string; name: string } | { id: string; name: string }[] | null;
-  tax_category: { id: string; name: string } | { id: string; name: string }[] | null;
 }
 
 interface EntryWithJoin {
   id: string;
   entry_date: string;
+  created_at: string;
   description: string | null;
   status: string;
   is_excluded: boolean;
   supplier_id: string | null;
   lines: ExportLine[];
+  // フロントマッピング用
+  _debitAccountName?: string;
+  _debitTaxCatName?: string;
 }
 
 interface ExportRecord {
@@ -77,15 +81,8 @@ function getDebitLine(entry: EntryWithJoin) { return entry.lines?.find(l => l.de
 function getCreditLine(entry: EntryWithJoin) { return entry.lines?.find(l => l.debit_credit === 'credit'); }
 function getEntryAmount(entry: EntryWithJoin) { return entry.lines?.filter(l => l.debit_credit === 'debit').reduce((s, l) => s + (l.amount ?? 0), 0) ?? 0; }
 
-/** Supabase JOIN は FK によって配列 or オブジェクトを返す。安全にname取得 */
-function getRelName(rel: { id: string; name: string } | { id: string; name: string }[] | null | undefined): string {
-  if (!rel) return '';
-  if (Array.isArray(rel)) return rel[0]?.name || '';
-  return rel.name || '';
-}
-
 // ============================================
-// freee CSV生成（サンプルCSV準拠 UTF-8 BOM付き）
+// freee CSV生成
 // ============================================
 function buildFreeeCsv(entries: EntryWithJoin[]): string {
   const headers = [
@@ -101,32 +98,20 @@ function buildFreeeCsv(entries: EntryWithJoin[]): string {
     const credit = getCreditLine(entry);
     if (!debit) return;
 
-    const accountName = getRelName(debit.account_item);
-    const taxCatName = getRelName(debit.tax_category);
+    const accountName = entry._debitAccountName || '';
+    const taxCatName = entry._debitTaxCatName || '';
     const amount = debit.amount?.toString() || '0';
     const taxAmount = debit.tax_amount?.toString() || '';
     const isIncome = accountName.includes('売上') || accountName.includes('収入');
 
     rows.push([
-      isIncome ? '収入' : '支出',   // 収支区分
-      '',                             // 管理番号
-      entry.entry_date?.replace(/-/g, '/') || '', // 発生日
-      '',                             // 決済期日
-      '',                             // 取引先コード
-      '',                             // 取引先（TODO: supplier JOIN）
-      accountName,                    // 勘定科目
-      taxCatName,                     // 税区分
-      amount,                         // 金額
-      '内税',                         // 税計算区分（デフォルト内税）
-      taxAmount,                      // 税額
-      entry.description || '',        // 備考
-      '',                             // 品目
-      '',                             // 部門
-      '',                             // メモタグ
-      '', '', '',                     // セグメント1-3
-      credit ? entry.entry_date?.replace(/-/g, '/') || '' : '', // 決済日
-      credit ? getRelName(credit.account_item) : '',  // 決済口座
-      credit ? (credit.amount?.toString() || '') : '', // 決済金額
+      isIncome ? '収入' : '支出',
+      '', entry.entry_date?.replace(/-/g, '/') || '', '', '', '',
+      accountName, taxCatName, amount, '内税', taxAmount,
+      entry.description || '', '', '', '', '', '', '',
+      credit ? entry.entry_date?.replace(/-/g, '/') || '' : '',
+      credit ? '' : '',
+      credit ? (credit.amount?.toString() || '') : '',
     ]);
   });
 
@@ -162,7 +147,8 @@ export default function ExportPage() {
   const clientId = searchParams.get('client_id') ?? currentWorkflow?.clientId ?? '';
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('出力');
-  const [periodFilter, setPeriodFilter] = useState<PeriodFilter>('本日');  // ← デフォルト「本日」に変更
+  const [periodFilter, setPeriodFilter] = useState<PeriodFilter>('本日');
+  const [dateBasis, setDateBasis] = useState<DateBasis>('取引日');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
   const [excludedFilter, setExcludedFilter] = useState<ExcludedFilter>('対象外除く');
@@ -173,27 +159,52 @@ export default function ExportPage() {
   const [historyLoading, setHistoryLoading] = useState(false);
 
   // ============================================
-  // 仕訳データ取得（account_items, tax_categories を JOIN）
+  // データ取得
   // ============================================
   useEffect(() => { if (clientId) loadEntries(); }, [clientId]);
 
   const loadEntries = async () => {
     setLoading(true);
+
+    // マスタ取得
+    const [accountsRes, taxRes] = await Promise.all([
+      accountItemsApi.getAll(),
+      taxCategoriesApi.getAll(),
+    ]);
+    const accts = accountsRes.data || [];
+    const taxCats = taxRes.data || [];
+
+    const accountMap = new Map(accts.map(a => [a.id, a.name]));
+    const taxCatMap = new Map(taxCats.map(t => [t.id, t.display_name || t.name]));
+
+    // -------------------------------------------------------
+    // 修正: ネストJOINを排除してフラットクエリ + フロントマッピング
+    // account_items が tax_categories を参照しているため、
+    // PostgRESTが曖昧性エラーを出す問題を回避
+    // -------------------------------------------------------
     const { data, error } = await supabase
       .from('journal_entries')
       .select(`
-        id, entry_date, description, status, is_excluded, supplier_id,
+        id, entry_date, created_at, description, status, is_excluded, supplier_id,
         lines:journal_entry_lines(
-          id, line_number, debit_credit, account_item_id, tax_category_id, amount, tax_rate, tax_amount, description,
-          account_item:account_items(id, name),
-          tax_category:tax_categories(id, name)
+          id, line_number, debit_credit, account_item_id, tax_category_id, amount, tax_rate, tax_amount, description
         )
       `)
       .eq('client_id', clientId)
       .in('status', ['approved', 'posted'])
       .order('entry_date', { ascending: false });
 
-    if (!error && data) setEntries(data as unknown as EntryWithJoin[]);
+    if (!error && data) {
+      const mapped = (data as unknown as EntryWithJoin[]).map(entry => {
+        const debit = entry.lines?.find(l => l.debit_credit === 'debit');
+        return {
+          ...entry,
+          _debitAccountName: debit?.account_item_id ? accountMap.get(debit.account_item_id) || '' : '',
+          _debitTaxCatName: debit?.tax_category_id ? taxCatMap.get(debit.tax_category_id) || '' : '',
+        };
+      });
+      setEntries(mapped);
+    }
     setLoading(false);
   };
 
@@ -207,11 +218,19 @@ export default function ExportPage() {
     setHistoryLoading(false);
   };
 
-  // フィルタリング
+  // -------------------------------------------------------
+  // フィルタリング: 日付基準（取引日 or 処理日）で切り替え
+  // -------------------------------------------------------
   const filteredByPeriod = useMemo(() => {
     const { start, end } = getDateRange(periodFilter, customStart, customEnd);
-    return entries.filter(e => { if (!start && !end) return true; const d = new Date(e.entry_date); return (!start || d >= start) && (!end || d <= end); });
-  }, [entries, periodFilter, customStart, customEnd]);
+    return entries.filter(e => {
+      if (!start && !end) return true;
+      // 日付基準に応じてフィルタ対象を切り替え
+      const dateStr = dateBasis === '取引日' ? e.entry_date : e.created_at;
+      const d = new Date(dateStr);
+      return (!start || d >= start) && (!end || d <= end);
+    });
+  }, [entries, periodFilter, customStart, customEnd, dateBasis]);
 
   const filteredEntries = useMemo(() => {
     return excludedFilter === '対象外除く' ? filteredByPeriod.filter(e => !e.is_excluded) : filteredByPeriod;
@@ -224,7 +243,6 @@ export default function ExportPage() {
     return { total: filteredByPeriod.length, active: active.length, excluded: excluded.length, totalAmount: total };
   }, [filteredByPeriod]);
 
-  // CSV ダウンロード
   const handleCsvDownload = () => {
     const csv = buildFreeeCsv(filteredEntries);
     const name = currentWorkflow?.clientName ?? clientId;
@@ -269,9 +287,23 @@ export default function ExportPage() {
 
           {activeTab === '出力' && (
             <>
-              {/* 期間フィルター */}
+              {/* 期間フィルター + 日付基準切り替え */}
               <div className="card">
-                <h2 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2"><Calendar size={16} />対象期間</h2>
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-2"><Calendar size={16} />対象期間</h2>
+                  {/* 日付基準セレクター */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-500">基準:</span>
+                    <div className="flex rounded-lg border border-gray-300 overflow-hidden">
+                      {(['取引日', '処理日'] as DateBasis[]).map(basis => (
+                        <button key={basis} onClick={() => setDateBasis(basis)}
+                          className={`px-3 py-1 text-xs font-medium transition-colors ${dateBasis === basis ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
+                          {basis}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
                 <div className="flex flex-wrap gap-2">
                   {(['全期間', '本日', '今週', '今月', '先月', 'カスタム'] as PeriodFilter[]).map(p => (
                     <button key={p} onClick={() => setPeriodFilter(p)}
@@ -287,6 +319,9 @@ export default function ExportPage() {
                     <input type="date" value={customEnd} onChange={e => setCustomEnd(e.target.value)} className="input w-auto text-sm" />
                   </div>
                 )}
+                <p className="text-xs text-gray-400 mt-2">
+                  {dateBasis === '取引日' ? '※ 証憑の取引日（entry_date）でフィルタしています' : '※ 仕訳の作成日（created_at）でフィルタしています'}
+                </p>
               </div>
 
               {/* サマリー */}
@@ -341,20 +376,20 @@ export default function ExportPage() {
                     <table className="w-full text-sm">
                       <thead className="bg-gray-50 border-b border-gray-200">
                         <tr>
-                          {['取引日', '勘定科目', '税区分', '金額', '摘要', '対象外'].map(h => (
+                          {['取引日', '処理日', '勘定科目', '税区分', '金額', '摘要', '対象外'].map(h => (
                             <th key={h} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
                         {filteredEntries.map(entry => {
-                          const debit = getDebitLine(entry);
                           const amount = getEntryAmount(entry);
                           return (
                             <tr key={entry.id} className={`hover:bg-gray-50 ${entry.is_excluded ? 'opacity-50' : ''}`}>
                               <td className="px-4 py-3 text-gray-700">{formatDate(entry.entry_date)}</td>
-                              <td className="px-4 py-3 text-gray-900 font-medium">{getRelName(debit?.account_item) || '-'}</td>
-                              <td className="px-4 py-3 text-gray-600">{getRelName(debit?.tax_category) || '-'}</td>
+                              <td className="px-4 py-3 text-gray-500 text-xs">{formatDate(entry.created_at)}</td>
+                              <td className="px-4 py-3 text-gray-900 font-medium">{entry._debitAccountName || '-'}</td>
+                              <td className="px-4 py-3 text-gray-600">{entry._debitTaxCatName || '-'}</td>
                               <td className="px-4 py-3 text-right font-mono text-gray-900">{formatCurrency(amount)}</td>
                               <td className="px-4 py-3 text-gray-600 max-w-[200px] truncate">{entry.description || '-'}</td>
                               <td className="px-4 py-3">{entry.is_excluded && <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">対象外</span>}</td>
