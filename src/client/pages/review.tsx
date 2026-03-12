@@ -69,6 +69,7 @@ export default function ReviewPage() {
 
   // ルール追加
   const [addRule, setAddRule] = useState(false);
+  const [ruleScope, setRuleScope] = useState<'shared' | 'industry' | 'client'>('shared');
   const [ruleIndustryId, setRuleIndustryId] = useState('');
 
   // ============================================
@@ -199,6 +200,7 @@ export default function ReviewPage() {
     setForm({ ...items[nextIndex] });
     setSavedAt(null);
     setAddRule(false);
+    setRuleScope('shared');
     setRuleIndustryId('');
   };
 
@@ -245,13 +247,19 @@ export default function ReviewPage() {
       if (!orgId) {
         console.error('ルール追加エラー: organization_id を取得できません');
       } else {
+        // scope判定: client > industry > shared
+        const scope = ruleScope === 'client' ? 'client' as const
+          : ruleScope === 'industry' ? 'industry' as const
+          : 'shared' as const;
+
         const ruleData = {
           organization_id: orgId,
           rule_name: `${form.description || item.supplierName || '不明'} → 自動仕訳`,
-          priority: 100,
+          priority: scope === 'client' ? 200 : scope === 'industry' ? 150 : 100,
           rule_type: '支出' as const,
-          scope: ruleIndustryId ? 'industry' as const : 'shared' as const,
-          industry_id: ruleIndustryId || null,
+          scope,
+          industry_id: scope === 'industry' ? ruleIndustryId || null : null,
+          client_id: scope === 'client' ? currentWorkflow?.clientId || null : null,
           conditions: {
             supplier_pattern: item.supplierName || null,
           },
@@ -553,19 +561,34 @@ export default function ReviewPage() {
                 </button>
               </div>
 
-              {/* ルール追加チェックボックス + 業種セレクト */}
-              <div className="flex items-center gap-3">
+              {/* ルール追加チェックボックス + スコープ選択 */}
+              <div className="flex items-center gap-3 flex-wrap">
                 <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="checkbox" checked={addRule} onChange={e => setAddRule(e.target.checked)}
+                  <input type="checkbox" checked={addRule} onChange={e => { setAddRule(e.target.checked); if (!e.target.checked) { setRuleScope('shared'); setRuleIndustryId(''); } }}
                     className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
                   <span className="text-sm text-gray-700">ルール追加</span>
                 </label>
                 {addRule && (
-                  <select value={ruleIndustryId} onChange={e => setRuleIndustryId(e.target.value)}
-                    className="border border-gray-300 rounded-md p-1.5 text-sm bg-white">
-                    <option value="">共通ルール</option>
-                    {industries.map(ind => <option key={ind.id} value={ind.id}>{ind.name}</option>)}
-                  </select>
+                  <>
+                    <select value={ruleScope} onChange={e => { setRuleScope(e.target.value as any); setRuleIndustryId(''); }}
+                      className="border border-gray-300 rounded-md p-1.5 text-sm bg-white">
+                      <option value="shared">共通ルール</option>
+                      <option value="industry">業種別</option>
+                      <option value="client">この顧客専用</option>
+                    </select>
+                    {ruleScope === 'industry' && (
+                      <select value={ruleIndustryId} onChange={e => setRuleIndustryId(e.target.value)}
+                        className="border border-gray-300 rounded-md p-1.5 text-sm bg-white">
+                        <option value="">業種を選択</option>
+                        {industries.map(ind => <option key={ind.id} value={ind.id}>{ind.name}</option>)}
+                      </select>
+                    )}
+                    {ruleScope === 'client' && (
+                      <span className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded">
+                        {currentWorkflow?.clientName || '現在の顧客'} 専用ルール
+                      </span>
+                    )}
+                  </>
                 )}
               </div>
             </div>

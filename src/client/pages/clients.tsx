@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Search, Plus, Edit, Trash2, Play, RotateCcw, X, AlertTriangle } from 'lucide-react';
+import { Search, Plus, Edit, Trash2, RotateCcw, X, AlertTriangle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useWorkflow } from '@/client/context/WorkflowContext';
 import type { Client, Industry } from '@/types';
@@ -409,7 +409,7 @@ export default function ClientsPage() {
                               onClick={() => handleStart(client)}
                               className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700"
                             >
-                              <Play size={14} />詳細
+                              詳細へ
                             </button>
                           )}
                         </div>
