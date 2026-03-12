@@ -72,14 +72,14 @@ async function getOrganizationId(clientId: string): Promise<string | null> {
   return data.organization_id || null;
 }
 
-/** organization_id に属する勘定科目を取得 */
+/** 勘定科目を取得（組織固有 + 共通マスタ(organization_id=NULL)） */
 async function fetchAccountItems(organizationId: string): Promise<AccountItemRef[]> {
-  console.log(`[fetchAccountItems] organization_id="${organizationId}" で勘定科目を取得中...`);
+  console.log(`[fetchAccountItems] organization_id="${organizationId}" で勘定科目を取得中（共通マスタ含む）...`);
 
   const { data, error, status } = await supabaseAdmin
     .from('account_items')
     .select('id, code, name, category:account_categories(name)')
-    .eq('organization_id', organizationId)
+    .or(`organization_id.eq.${organizationId},organization_id.is.null`)
     .eq('is_active', true)
     .order('code', { ascending: true });
 
@@ -105,32 +105,63 @@ async function fetchAccountItems(organizationId: string): Promise<AccountItemRef
   return items;
 }
 
-/** 税区分を取得（システム共通マスタ） */
+/** 税区分を取得（tax_rates を JOIN して税率を取得） */
 async function fetchTaxCategories(): Promise<TaxCategoryRef[]> {
-  console.log(`[fetchTaxCategories] 税区分マスタを取得中...`);
+  console.log(`[fetchTaxCategories] 税区分マスタを取得中（tax_rates JOIN）...`);
 
   const { data, error, status } = await supabaseAdmin
     .from('tax_categories')
-    .select('id, code, name, rate')
+    .select('id, code, name, tax_rate:tax_rates!current_tax_rate_id(rate)')
     .eq('is_active', true)
     .order('code', { ascending: true });
 
   if (error) {
-    console.error(`[fetchTaxCategories] ❌ Supabase エラー:`, {
-      message: error.message,
-      code: error.code,
-      details: error.details,
-      hint: error.hint,
-      httpStatus: status,
-    });
-    return [];
+    // FK名が違う場合のフォールバック: tax_rates を JOIN せずに取得
+    console.warn(`[fetchTaxCategories] ⚠️ JOIN エラー（FK名不一致の可能性）:`, error.message);
+    console.log(`[fetchTaxCategories] フォールバック: tax_rates なしで取得中...`);
+
+    const { data: fallbackData, error: fallbackError } = await supabaseAdmin
+      .from('tax_categories')
+      .select('id, code, name, current_tax_rate_id')
+      .eq('is_active', true)
+      .order('code', { ascending: true });
+
+    if (fallbackError) {
+      console.error(`[fetchTaxCategories] ❌ フォールバックも失敗:`, fallbackError.message);
+      return [];
+    }
+
+    // current_tax_rate_id を使って tax_rates を個別取得
+    const rateIds = [...new Set((fallbackData || []).map((t: any) => t.current_tax_rate_id).filter(Boolean))];
+    let rateMap: Record<string, number> = {};
+
+    if (rateIds.length > 0) {
+      const { data: rates } = await supabaseAdmin
+        .from('tax_rates')
+        .select('id, rate')
+        .in('id', rateIds);
+
+      if (rates) {
+        rateMap = Object.fromEntries(rates.map((r: any) => [r.id, Number(r.rate)]));
+      }
+    }
+
+    const categories = (fallbackData || []).map((item: any) => ({
+      id: item.id,
+      code: item.code || '',
+      name: item.name,
+      rate: item.current_tax_rate_id ? (rateMap[item.current_tax_rate_id] || 0) : 0,
+    }));
+
+    console.log(`[fetchTaxCategories] ✅ ${categories.length}件の税区分を取得（フォールバック）`);
+    return categories;
   }
 
   const categories = (data || []).map((item: any) => ({
     id: item.id,
     code: item.code || '',
     name: item.name,
-    rate: Number(item.rate) || 0,
+    rate: Number(item.tax_rate?.rate) || 0,
   }));
 
   console.log(`[fetchTaxCategories] ✅ ${categories.length}件の税区分を取得`);
@@ -139,21 +170,23 @@ async function fetchTaxCategories(): Promise<TaxCategoryRef[]> {
 
 /** 「雑費」のフォールバック用 UUID を取得 */
 async function findFallbackAccountId(organizationId: string): Promise<string> {
+  // organization固有 → 共通(null) の順で検索
   const { data, error } = await supabaseAdmin
     .from('account_items')
     .select('id')
-    .eq('organization_id', organizationId)
+    .or(`organization_id.eq.${organizationId},organization_id.is.null`)
     .eq('name', '雑費')
-    .limit(1)
-    .single();
+    .eq('is_active', true)
+    .limit(1);
 
   if (error) {
     console.warn(`[findFallbackAccountId] 「雑費」が見つかりません:`, error.message);
     return '';
   }
 
-  console.log(`[findFallbackAccountId] ✅ 雑費 ID="${data?.id}"`);
-  return data?.id || '';
+  const fallbackId = data?.[0]?.id || '';
+  console.log(`[findFallbackAccountId] ✅ 雑費 ID="${fallbackId}"`);
+  return fallbackId;
 }
 
 // ============================================

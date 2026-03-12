@@ -30,6 +30,7 @@ interface DocumentWithEntry {
   status: string;
   isExcluded: boolean;
   isBusiness: boolean;
+  aiConfidence: number | null;
   // journal_entry_lines (最初の1行 = 借方)
   lineId: string | null;
   accountItemId: string;
@@ -70,36 +71,54 @@ export default function ReviewPage() {
 
     const clientId = currentWorkflow.clientId;
 
-    // このワークフローの documents を取得
-    const { data: docs } = await supabase
+    // -----------------------------------------------
+    // 1. このワークフローの documents を取得
+    // -----------------------------------------------
+    const { data: docs, error: docsError } = await supabase
       .from('documents')
       .select('id, file_name, original_file_name, storage_path, file_path, supplier_name, document_date, amount, tax_amount')
       .eq('workflow_id', currentWorkflow.id)
       .eq('client_id', clientId)
       .order('created_at');
 
+    if (docsError) {
+      console.error('documents 取得エラー:', docsError);
+    }
+
     if (!docs || docs.length === 0) {
       setLoading(false);
       return;
     }
 
-    // journal_entries + lines を取得
-    const { data: entries } = await supabase
+    // -----------------------------------------------
+    // 2. document_id IN (...) で journal_entries を取得
+    //    ※ journal_entries に workflow_id は存在しないため
+    //      documents 経由で取得する
+    // -----------------------------------------------
+    const docIds = docs.map((d: any) => d.id);
+
+    const { data: entries, error: entriesError } = await supabase
       .from('journal_entries')
       .select(`
-        id, entry_date, description, status, is_excluded,
+        id, entry_date, description, status, is_excluded, ai_confidence,
         document_id,
         journal_entry_lines (
-          id, debit_credit, account_item_id, tax_category_id, amount, tax_rate,
+          id, debit_credit, account_item_id, tax_category_id, amount, tax_rate, description,
           account_item:account_items!journal_entry_lines_account_item_id_fkey(id, name),
           tax_category:tax_categories!journal_entry_lines_tax_category_id_fkey(id, name)
         )
       `)
       .eq('client_id', clientId)
-      .eq('workflow_id', currentWorkflow.id)
+      .in('document_id', docIds)
       .in('status', ['pending', 'approved', 'draft']);
 
-    // docs と entries をマージ
+    if (entriesError) {
+      console.error('journal_entries 取得エラー:', entriesError);
+    }
+
+    // -----------------------------------------------
+    // 3. docs と entries をマージ
+    // -----------------------------------------------
     const merged: DocumentWithEntry[] = await Promise.all(
       docs.map(async (doc: any) => {
         // Storage 署名付きURL取得
@@ -129,10 +148,11 @@ export default function ReviewPage() {
           taxAmount: doc.tax_amount,
           entryId: entry?.id || null,
           entryDate: entry?.entry_date || doc.document_date || new Date().toISOString().split('T')[0],
-          description: entry?.description || '',
-          status: entry?.status || 'pending',
+          description: entry?.description || doc.supplier_name || '',
+          status: entry?.status || 'draft',
           isExcluded: entry?.is_excluded || false,
           isBusiness: !entry?.is_excluded,
+          aiConfidence: entry?.ai_confidence || null,
           lineId: debitLine?.id || null,
           accountItemId: debitLine?.account_item_id || '',
           taxCategoryId: debitLine?.tax_category_id || '',
@@ -145,7 +165,9 @@ export default function ReviewPage() {
     setItems(merged);
     if (merged.length > 0) setForm({ ...merged[0] });
 
-    // マスタ取得
+    // -----------------------------------------------
+    // 4. マスタ取得
+    // -----------------------------------------------
     const [accountsRes, taxRes] = await Promise.all([
       accountItemsApi.getAll(),
       taxCategoriesApi.getAll(),
@@ -176,7 +198,7 @@ export default function ReviewPage() {
     setSaving(true);
 
     // journal_entries 更新
-    await supabase
+    const { error: updateError } = await supabase
       .from('journal_entries')
       .update({
         entry_date: form.entryDate,
@@ -186,16 +208,24 @@ export default function ReviewPage() {
       })
       .eq('id', form.entryId);
 
+    if (updateError) {
+      console.error('仕訳ヘッダー更新エラー:', updateError);
+    }
+
     // journal_entry_lines 更新（借方行）
     if (form.lineId) {
-      await supabase
+      const { error: lineError } = await supabase
         .from('journal_entry_lines')
         .update({
-          account_item_id: form.accountItemId,
-          tax_category_id: form.taxCategoryId,
+          account_item_id: form.accountItemId || null,
+          tax_category_id: form.taxCategoryId || null,
           amount: form.lineAmount,
         })
         .eq('id', form.lineId);
+
+      if (lineError) {
+        console.error('仕訳明細行更新エラー:', lineError);
+      }
     }
 
     // items ステートも更新
@@ -357,11 +387,22 @@ export default function ReviewPage() {
               <h2 className="font-bold text-sm">仕訳データ</h2>
               <p className="text-xs text-gray-400">{currentWorkflow.clientName}</p>
             </div>
-            {currentItem.status === 'approved' && (
-              <span className="flex items-center gap-1 text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
-                <CheckCircle size={12} /> 承認済み
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              {currentItem.aiConfidence != null && (
+                <span className={`text-xs px-2 py-0.5 rounded-full ${
+                  currentItem.aiConfidence >= 0.8 ? 'bg-green-50 text-green-600' :
+                  currentItem.aiConfidence >= 0.5 ? 'bg-yellow-50 text-yellow-600' :
+                  'bg-red-50 text-red-600'
+                }`}>
+                  AI信頼度 {Math.round(currentItem.aiConfidence * 100)}%
+                </span>
+              )}
+              {currentItem.status === 'approved' && (
+                <span className="flex items-center gap-1 text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
+                  <CheckCircle size={12} /> 承認済み
+                </span>
+              )}
+            </div>
           </div>
 
           <div className="flex-1 p-4 flex flex-col gap-4 overflow-y-auto">
@@ -382,14 +423,12 @@ export default function ReviewPage() {
                 <label className="text-xs font-medium flex items-center gap-1">
                   <span className="w-2 h-2 rounded-full bg-blue-400"></span>取引日
                 </label>
-                <div className="relative">
-                  <input
-                    type="date"
-                    value={form.entryDate || ''}
-                    onChange={e => setForm(p => ({ ...p, entryDate: e.target.value }))}
-                    className="w-full border border-blue-200 bg-blue-50/30 rounded-md p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
+                <input
+                  type="date"
+                  value={form.entryDate || ''}
+                  onChange={e => setForm(p => ({ ...p, entryDate: e.target.value }))}
+                  className="w-full border border-blue-200 bg-blue-50/30 rounded-md p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
               </div>
 
               {/* 金額 */}
@@ -484,7 +523,7 @@ export default function ReviewPage() {
               </button>
             </div>
 
-            {/* AI信頼度 */}
+            {/* 仕訳ID */}
             {currentItem.entryId && (
               <div className="text-xs text-gray-400 text-right">
                 仕訳ID: {currentItem.entryId.slice(0, 8)}...
