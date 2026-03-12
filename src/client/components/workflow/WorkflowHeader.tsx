@@ -15,7 +15,8 @@ export interface WorkflowHeaderProps {
 // ============================================
 // ステップ定義
 // ============================================
-const STEPS = [1, 2, 3, 4, 5, 6, 7, 8] as const;
+const TOTAL_STEPS = 7;
+const STEPS = [1, 2, 3, 4, 5, 6, 7] as const;
 
 // ============================================
 // WorkflowHeader（進捗バー + ナビゲーション統合）
@@ -96,7 +97,7 @@ export default function WorkflowHeader({
 
   const currentStep = currentWorkflow.currentStep;
   const completedCount = currentWorkflow.completedSteps.length;
-  const progressPercent = Math.round((completedCount / 8) * 100);
+  const progressPercent = Math.round((completedCount / TOTAL_STEPS) * 100);
 
   return (
     <div className="bg-white border-b border-gray-200 flex-shrink-0">

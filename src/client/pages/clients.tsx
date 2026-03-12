@@ -149,7 +149,7 @@ export default function ClientsPage() {
     const wf = getWorkflowForClient(client.id);
     if (wf) {
       const confirmed = window.confirm(
-        `「${client.name}」の進行中ワークフローを破棄してやり直しますか？\n\n現在のステップ: ${wf.current_step}/8\n\n※ アップロード済みの証憑データは保持されますが、仕訳データはリセットされます。`
+        `「${client.name}」の進行中ワークフローを破棄してやり直しますか？\n\n現在のステップ: ${wf.current_step}/7\n\n※ アップロード済みの証憑データは保持されますが、仕訳データはリセットされます。`
       );
       if (!confirmed) return;
       await workflowsApi.cancel(wf.id);
@@ -263,7 +263,7 @@ export default function ClientsPage() {
 
   // ステップ名のヘルパー
   const getStepLabel = (step: number): string => {
-    const names = ['', '顧客選択', 'アップロード', 'OCR', 'AIチェック', '仕訳確認', '仕訳出力', '集計', '対象外'];
+    const names = ['', 'アップロード', 'OCR', 'AIチェック', '仕訳確認', '仕訳出力', '集計', '対象外'];
     return names[step] || '';
   };
 
@@ -304,12 +304,12 @@ export default function ClientsPage() {
                   <h3 className="font-semibold text-gray-900 mb-1">{wf.clientName}</h3>
                   <div className="flex items-center gap-4 text-sm text-gray-500">
                     <span>
-                      現在: <span className="font-medium text-gray-700">{getStepLabel(wf.current_step)}</span>（{wf.current_step}/8）
+                      現在: <span className="font-medium text-gray-700">{getStepLabel(wf.current_step)}</span>（{wf.current_step}/7）
                     </span>
                     <span>最終更新: {new Date(wf.updated_at).toLocaleString('ja-JP')}</span>
                   </div>
                   <div className="mt-2 w-full bg-gray-200 rounded-full h-2">
-                    <div className="bg-blue-600 h-2 rounded-full transition-all" style={{ width: `${(wf.current_step / 8) * 100}%` }} />
+                    <div className="bg-blue-600 h-2 rounded-full transition-all" style={{ width: `${(wf.current_step / 7) * 100}%` }} />
                   </div>
                 </div>
                 <div className="ml-4 flex items-center gap-2">
@@ -380,8 +380,12 @@ export default function ClientsPage() {
                   const wf = getWorkflowForClient(client.id);
                   const hasWf = !!wf;
                   return (
-                    <tr key={client.id} className="hover:bg-gray-50">
-                      <td className="px-4 py-4 whitespace-nowrap">
+                    <tr
+                      key={client.id}
+                      className="hover:bg-gray-50 cursor-pointer"
+                      onClick={() => handleStart(client)}
+                    >
+                      <td className="px-4 py-4 whitespace-nowrap" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center gap-1">
                           {hasWf ? (
                             <>
@@ -405,18 +409,15 @@ export default function ClientsPage() {
                               onClick={() => handleStart(client)}
                               className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700"
                             >
-                              <Play size={14} />開始
+                              <Play size={14} />詳細
                             </button>
                           )}
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <button
-                          onClick={() => handleStart(client)}
-                          className="text-sm font-medium text-blue-600 hover:underline"
-                        >
+                        <span className="text-sm font-medium text-blue-600">
                           {client.name}
-                        </button>
+                        </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                         {client.industry?.name || '-'}
@@ -441,7 +442,7 @@ export default function ClientsPage() {
                       <td className="px-6 py-4 whitespace-nowrap">
                         {hasWf ? (
                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
-                            {getStepLabel(wf.current_step)} ({wf.current_step}/8)
+                            {getStepLabel(wf.current_step)} ({wf.current_step}/7)
                           </span>
                         ) : (
                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
@@ -449,7 +450,7 @@ export default function ClientsPage() {
                           </span>
                         )}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right">
+                      <td className="px-6 py-4 whitespace-nowrap text-right" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-2">
                           <button
                             onClick={() => handleOpenEditModal(client)}

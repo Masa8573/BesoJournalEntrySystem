@@ -185,7 +185,6 @@ function dbRowToState(row: Record<string, unknown>, clientName = ''): WorkflowSt
 // ============================================
 export function getStepName(step: number): string {
   const stepNames = [
-    '顧客選択',
     '証憑アップロード',
     'OCR処理',
     'AIチェック',
@@ -202,19 +201,18 @@ export function getStepName(step: number): string {
 // 新URL構造: /clients/:id/upload 等
 // ============================================
 export function getStepPath(step: number, clientId?: string): string {
-  if (!clientId || step <= 1) {
+  if (!clientId || step < 1) {
     return '/clients';
   }
 
   const stepSlugs: Record<number, string> = {
-    1: '',          // step 1 は顧客選択 = /clients
-    2: 'upload',
-    3: 'ocr',
-    4: 'aicheck',
-    5: 'review',
-    6: 'export',
-    7: 'summary',
-    8: 'excluded',
+    1: 'upload',
+    2: 'ocr',
+    3: 'aicheck',
+    4: 'review',
+    5: 'export',
+    6: 'summary',
+    7: 'excluded',
   };
 
   const slug = stepSlugs[step];
