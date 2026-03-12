@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react';
-import { CheckCircle, XCircle, Edit2, Save, X, AlertCircle } from 'lucide-react';
+import { CheckCircle, XCircle, Edit2, Save, X, AlertCircle, Loader, ShieldCheck } from 'lucide-react';
 import { supabase } from '@/client/lib/supabase';
 import { accountItemsApi, taxCategoriesApi } from '@/client/lib/api';
 import { useWorkflow } from '@/client/context/WorkflowContext';
-import ProgressBar from '@/client/components/workflow/ProgressBar';
-import WorkflowNavigation from '@/client/components/workflow/WorkflowNavigation';
+import WorkflowHeader from '@/client/components/workflow/WorkflowHeader';
 import type { AccountItem, TaxCategory } from '@/types';
 
-// journal_entries テーブルのローカル型（api.ts の JournalEntry 型と合わせる）
-interface JournalEntryRow {
+// ============================================
+// 型定義
+// ============================================
+interface EntryRow {
   id: string;
   client_id: string;
   document_id?: string;
@@ -17,35 +18,32 @@ interface JournalEntryRow {
   status: string;
   notes?: string;
   ai_confidence?: number;
-  // journal_entry_lines JOIN
-  journal_entry_lines?: JournalEntryLine[];
+  ai_generated?: boolean;
+  requires_review?: boolean;
+  // JOIN
+  lines: LineRow[];
+  // 表示用フラット
+  accountItemName?: string;
+  taxCategoryName?: string;
+  amount?: number;
 }
 
-interface JournalEntryLine {
+interface LineRow {
   id: string;
-  journal_entry_id: string;
   line_number: number;
-  debit_credit: 'debit' | 'credit';
+  debit_credit: string;
   account_item_id?: string;
   tax_category_id?: string;
   amount?: number;
   description?: string;
   // relations
-  account_item?: AccountItem;
-  tax_category?: TaxCategory;
-}
-
-// 画面表示用の統合型
-interface EntryWithLines extends JournalEntryRow {
-  // 表示用フラット項目（単一仕訳用のプロキシ）
-  account_item_name?: string;
-  tax_category_name?: string;
-  amount?: number;
+  account_item?: { id: string; name: string };
+  tax_category?: { id: string; name: string };
 }
 
 export default function AiCheckPage() {
   const { currentWorkflow, updateWorkflowData } = useWorkflow();
-  const [entries, setEntries] = useState<EntryWithLines[]>([]);
+  const [entries, setEntries] = useState<EntryRow[]>([]);
   const [accountItems, setAccountItems] = useState<AccountItem[]>([]);
   const [taxCategories, setTaxCategories] = useState<TaxCategory[]>([]);
   const [loading, setLoading] = useState(true);
@@ -66,50 +64,65 @@ export default function AiCheckPage() {
   // ============================================
   const loadData = async () => {
     if (!currentWorkflow) return;
-
     setLoading(true);
 
     const clientId = currentWorkflow.clientId;
 
-    // journal_entries + lines を取得（pending ステータスのみ）
+    // documents から document_id 一覧を取得（workflow_id 経由）
+    const { data: docs } = await supabase
+      .from('documents')
+      .select('id')
+      .eq('workflow_id', currentWorkflow.id)
+      .eq('client_id', clientId);
+
+    const docIds = docs?.map((d: any) => d.id) || [];
+
+    if (docIds.length === 0) {
+      setEntries([]);
+      setLoading(false);
+      return;
+    }
+
+    // journal_entries + lines を取得（draft ステータス、document_id でフィルタ）
     const { data: entriesData, error } = await supabase
       .from('journal_entries')
       .select(`
-        *,
+        id, client_id, document_id, entry_date, description, status, notes, ai_confidence, ai_generated, requires_review,
         journal_entry_lines (
-          *,
-          account_item:account_items!journal_entry_lines_account_item_id_fkey(*),
-          tax_category:tax_categories!journal_entry_lines_tax_category_id_fkey(*)
+          id, line_number, debit_credit, account_item_id, tax_category_id, amount, description,
+          account_item:account_items!journal_entry_lines_account_item_id_fkey(id, name),
+          tax_category:tax_categories!journal_entry_lines_tax_category_id_fkey(id, name)
         )
       `)
       .eq('client_id', clientId)
-      .eq('status', 'pending')
-      .order('entry_date', { ascending: false });
+      .in('document_id', docIds)
+      .in('status', ['draft', 'pending'])
+      .order('entry_date', { ascending: true });
 
     if (error) {
       console.error('仕訳取得エラー:', error);
     }
 
     if (entriesData) {
-      // 表示用にフラット化
-      const flatEntries: EntryWithLines[] = entriesData.map((entry: any) => {
-        const firstLine = entry.journal_entry_lines?.[0];
+      const mapped: EntryRow[] = entriesData.map((entry: any) => {
+        const debitLine = entry.journal_entry_lines?.find((l: any) => l.debit_credit === 'debit')
+          || entry.journal_entry_lines?.[0];
         return {
           ...entry,
-          account_item_name: firstLine?.account_item?.name,
-          tax_category_name: firstLine?.tax_category?.name,
-          amount: firstLine?.amount,
+          lines: entry.journal_entry_lines || [],
+          accountItemName: debitLine?.account_item?.name,
+          taxCategoryName: debitLine?.tax_category?.name,
+          amount: debitLine?.amount,
         };
       });
-      setEntries(flatEntries);
+      setEntries(mapped);
     }
 
-    // マスタデータ取得
+    // マスタ取得
     const [accountsRes, taxRes] = await Promise.all([
       accountItemsApi.getAll(),
       taxCategoriesApi.getAll(),
     ]);
-
     if (accountsRes.data) setAccountItems(accountsRes.data);
     if (taxRes.data) setTaxCategories(taxRes.data);
 
@@ -119,27 +132,25 @@ export default function AiCheckPage() {
   // ============================================
   // 編集
   // ============================================
-  const handleEdit = (entry: EntryWithLines) => {
+  const handleEdit = (entry: EntryRow) => {
     setEditingId(entry.id);
-    const firstLine = entry.journal_entry_lines?.[0];
+    const debitLine = entry.lines.find(l => l.debit_credit === 'debit') || entry.lines[0];
     setEditForm({
-      account_item_id: firstLine?.account_item_id,
-      tax_category_id: firstLine?.tax_category_id,
-      amount: firstLine?.amount,
+      account_item_id: debitLine?.account_item_id,
+      tax_category_id: debitLine?.tax_category_id,
+      amount: debitLine?.amount,
       notes: entry.notes,
     });
   };
 
-  const handleSave = async (entry: EntryWithLines) => {
-    // journal_entries の notes を更新
+  const handleSave = async (entry: EntryRow) => {
     await supabase
       .from('journal_entries')
       .update({ notes: editForm.notes })
       .eq('id', entry.id);
 
-    // 最初の line を更新
-    const firstLine = entry.journal_entry_lines?.[0];
-    if (firstLine) {
+    const debitLine = entry.lines.find(l => l.debit_credit === 'debit') || entry.lines[0];
+    if (debitLine) {
       await supabase
         .from('journal_entry_lines')
         .update({
@@ -147,7 +158,7 @@ export default function AiCheckPage() {
           tax_category_id: editForm.tax_category_id,
           amount: editForm.amount,
         })
-        .eq('id', firstLine.id);
+        .eq('id', debitLine.id);
     }
 
     await loadData();
@@ -161,40 +172,31 @@ export default function AiCheckPage() {
   };
 
   // ============================================
-  // 個別承認
+  // 承認 / 削除
   // ============================================
   const handleApprove = async (id: string) => {
-    await supabase
-      .from('journal_entries')
-      .update({ status: 'approved' })
-      .eq('id', id);
+    await supabase.from('journal_entries').update({ status: 'approved' }).eq('id', id);
     await loadData();
   };
 
-  // ============================================
-  // 個別削除
-  // ============================================
   const handleReject = async (id: string) => {
     if (window.confirm('この仕訳を削除しますか？')) {
+      // 明細行はCASCADE削除
       await supabase.from('journal_entries').delete().eq('id', id);
       await loadData();
     }
   };
 
-  // ============================================
-  // 一括承認
-  // ============================================
   const handleApproveAll = async () => {
-    if (window.confirm(`${entries.length}件の仕訳を一括承認しますか？`)) {
-      await supabase
-        .from('journal_entries')
-        .update({ status: 'approved' })
-        .in(
-          'id',
-          entries.map((e) => e.id)
-        );
-      await loadData();
-    }
+    if (entries.length === 0) return;
+    if (!window.confirm(`${entries.length}件の仕訳を一括承認しますか？`)) return;
+
+    await supabase
+      .from('journal_entries')
+      .update({ status: 'approved' })
+      .in('id', entries.map(e => e.id));
+
+    await loadData();
   };
 
   // ============================================
@@ -202,20 +204,18 @@ export default function AiCheckPage() {
   // ============================================
   const handleBeforeNext = async (): Promise<boolean> => {
     if (entries.length > 0) {
-      alert('未承認の仕訳があります。すべて承認または削除してください。');
-      return false;
+      const proceed = window.confirm(
+        `未承認の仕訳が${entries.length}件あります。\n\n一括承認して次に進みますか？\n「キャンセル」で戻って個別確認できます。`
+      );
+      if (!proceed) return false;
+      // 一括承認
+      await supabase
+        .from('journal_entries')
+        .update({ status: 'approved' })
+        .in('id', entries.map(e => e.id));
     }
 
-    // TODO: デュアルAI実装時にここを有効化する
-    // const aiCheckResult = await dualAiCheck(entries)
-    // if (aiCheckResult.hasMismatch) {
-    //   // 不一致があれば「要レビュー」フラグを立てて次へ進める
-    //   updateWorkflowData({ aiCheckHasMismatch: true });
-    // }
-
-    // aicheck_status を 'completed' に更新（workflowsテーブルのdataカラムに保存）
-    updateWorkflowData({ journalEntries: ['approved'], aiCheckStatus: 'completed' } as any);
-
+    updateWorkflowData({ aiCheckStatus: 'completed' } as any);
     return true;
   };
 
@@ -225,22 +225,16 @@ export default function AiCheckPage() {
   };
 
   // ============================================
-  // ワークフロー外アクセスガード
+  // ワークフロー外ガード
   // ============================================
   if (!currentWorkflow) {
     return (
       <div className="flex flex-col items-center justify-center h-full">
         <div className="text-center max-w-md">
           <AlertCircle size={64} className="text-yellow-500 mx-auto mb-4" />
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">
-            ワークフローが開始されていません
-          </h2>
-          <p className="text-gray-600 mb-6">
-            AIチェックを行うには、顧客一覧からワークフローを開始してください。
-          </p>
-          <a href="/clients" className="btn-primary">
-            顧客一覧へ戻る
-          </a>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">ワークフローが開始されていません</h2>
+          <p className="text-gray-600 mb-6">AIチェックを行うには、顧客一覧からワークフローを開始してください。</p>
+          <a href="/clients" className="btn-primary">顧客一覧へ戻る</a>
         </div>
       </div>
     );
@@ -248,30 +242,34 @@ export default function AiCheckPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-center">
-          <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-gray-600">読み込み中...</p>
+      <div className="flex flex-col h-screen">
+        <WorkflowHeader onBeforeNext={handleBeforeNext} nextLabel="仕訳確認へ" />
+        <div className="flex-1 flex items-center justify-center">
+          <Loader size={32} className="animate-spin text-blue-500" />
+          <span className="ml-3 text-gray-500">データを読み込み中...</span>
         </div>
       </div>
     );
   }
 
+  // 要確認件数（requires_review フラグ or 信頼度低い）
+  const reviewCount = entries.filter(e => e.requires_review || (e.ai_confidence && e.ai_confidence < 0.7)).length;
+
   return (
     <div className="flex flex-col h-screen">
-      {/* 進捗バー */}
-      <ProgressBar />
+      {/* ワークフローヘッダー */}
+      <WorkflowHeader onBeforeNext={handleBeforeNext} nextLabel="仕訳確認へ" />
 
       {/* メインコンテンツ */}
       <div className="flex-1 overflow-y-auto p-6">
         <div className="max-w-7xl mx-auto space-y-6">
-          {/* ページヘッダー */}
+
+          {/* ヘッダー + 一括承認 */}
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-2xl font-bold text-gray-900">AIチェック</h1>
               <p className="text-sm text-gray-500 mt-1">
-                {currentWorkflow.clientName}さん -{' '}
-                AIが自動生成した仕訳をレビュー・承認してください
+                AIが生成した仕訳を確認・承認してください
               </p>
             </div>
             {entries.length > 0 && (
@@ -295,30 +293,21 @@ export default function AiCheckPage() {
 
             <div className="card">
               <div className="flex items-center gap-2 mb-2">
-                <div className="w-3 h-3 bg-green-500 rounded-full"></div>
-                <h3 className="text-sm font-medium text-gray-600">AI信頼度</h3>
+                <ShieldCheck size={20} className="text-green-500" />
+                <h3 className="text-sm font-medium text-gray-600">AI生成済み</h3>
               </div>
               <div className="text-3xl font-bold text-gray-900">
-                {entries.length > 0
-                  ? Math.round(
-                      (entries.reduce((sum, e) => sum + (e.ai_confidence || 0.85), 0) /
-                        entries.length) *
-                        100
-                    )
-                  : 85}
-                %
+                {entries.filter(e => e.ai_generated).length}
               </div>
-              <div className="text-xs text-gray-500 mt-1">平均</div>
+              <div className="text-xs text-gray-500 mt-1">件</div>
             </div>
 
             <div className="card">
               <div className="flex items-center gap-2 mb-2">
-                <div className="w-3 h-3 bg-orange-500 rounded-full"></div>
+                <AlertCircle size={20} className="text-orange-500" />
                 <h3 className="text-sm font-medium text-gray-600">要確認</h3>
               </div>
-              <div className="text-3xl font-bold text-gray-900">
-                {entries.filter((e) => (e.ai_confidence || 0.85) < 0.7).length}
-              </div>
+              <div className="text-3xl font-bold text-gray-900">{reviewCount}</div>
               <div className="text-xs text-gray-500 mt-1">件</div>
             </div>
           </div>
@@ -329,12 +318,12 @@ export default function AiCheckPage() {
 
             {entries.length === 0 ? (
               <div className="text-center py-12">
-                <CheckCircle size={64} className="mx-auto text-gray-300 mb-4" />
+                <CheckCircle size={64} className="mx-auto text-green-300 mb-4" />
                 <p className="text-lg font-medium text-gray-600 mb-2">
                   確認待ちの仕訳はありません
                 </p>
                 <p className="text-sm text-gray-500">
-                  すべての仕訳を承認しました。次のステップに進んでください。
+                  すべて承認済みです。「→」キーまたは上部の「仕訳確認へ」で次に進んでください。
                 </p>
               </div>
             ) : (
@@ -342,39 +331,23 @@ export default function AiCheckPage() {
                 <table className="w-full">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        取引日
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        摘要
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        勘定科目（借方）
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        税区分
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        金額
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        備考
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        AI信頼度
-                      </th>
-                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">
-                        操作
-                      </th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">取引日</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">摘要</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">勘定科目</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">税区分</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">金額</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">備考</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">状態</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">操作</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
                     {entries.map((entry) => {
                       const isEditing = editingId === entry.id;
-                      const confidencePct = Math.round((entry.ai_confidence || 0.85) * 100);
+                      const needsReview = entry.requires_review || (entry.ai_confidence && entry.ai_confidence < 0.7);
 
                       return (
-                        <tr key={entry.id} className="hover:bg-gray-50">
+                        <tr key={entry.id} className={`hover:bg-gray-50 ${needsReview ? 'bg-yellow-50' : ''}`}>
                           <td className="px-4 py-4 text-sm text-gray-900">
                             {new Date(entry.entry_date).toLocaleDateString('ja-JP')}
                           </td>
@@ -385,21 +358,17 @@ export default function AiCheckPage() {
                             {isEditing ? (
                               <select
                                 value={editForm.account_item_id || ''}
-                                onChange={(e) =>
-                                  setEditForm({ ...editForm, account_item_id: e.target.value })
-                                }
+                                onChange={e => setEditForm({ ...editForm, account_item_id: e.target.value })}
                                 className="input text-sm py-1"
                               >
-                                <option value="">選択してください</option>
-                                {accountItems.map((item) => (
-                                  <option key={item.id} value={item.id}>
-                                    {item.name}
-                                  </option>
+                                <option value="">選択</option>
+                                {accountItems.map(item => (
+                                  <option key={item.id} value={item.id}>{item.name}</option>
                                 ))}
                               </select>
                             ) : (
-                              <span className="text-gray-900">
-                                {entry.account_item_name || '-'}
+                              <span className={needsReview ? 'text-orange-700 font-medium' : 'text-gray-900'}>
+                                {entry.accountItemName || '-'}
                               </span>
                             )}
                           </td>
@@ -407,21 +376,17 @@ export default function AiCheckPage() {
                             {isEditing ? (
                               <select
                                 value={editForm.tax_category_id || ''}
-                                onChange={(e) =>
-                                  setEditForm({ ...editForm, tax_category_id: e.target.value })
-                                }
+                                onChange={e => setEditForm({ ...editForm, tax_category_id: e.target.value })}
                                 className="input text-sm py-1"
                               >
-                                <option value="">選択してください</option>
-                                {taxCategories.map((cat) => (
-                                  <option key={cat.id} value={cat.id}>
-                                    {cat.name}
-                                  </option>
+                                <option value="">選択</option>
+                                {taxCategories.map(cat => (
+                                  <option key={cat.id} value={cat.id}>{cat.display_name || cat.name}</option>
                                 ))}
                               </select>
                             ) : (
-                              <span className="text-gray-900">
-                                {entry.tax_category_name || '-'}
+                              <span className={needsReview ? 'text-orange-700 font-medium' : 'text-gray-900'}>
+                                {entry.taxCategoryName || '-'}
                               </span>
                             )}
                           </td>
@@ -430,18 +395,11 @@ export default function AiCheckPage() {
                               <input
                                 type="number"
                                 value={editForm.amount || ''}
-                                onChange={(e) =>
-                                  setEditForm({
-                                    ...editForm,
-                                    amount: Number(e.target.value),
-                                  })
-                                }
-                                className="input text-sm py-1 w-32"
+                                onChange={e => setEditForm({ ...editForm, amount: Number(e.target.value) })}
+                                className="input text-sm py-1 w-28"
                               />
                             ) : (
-                              <span className="font-medium text-gray-900">
-                                {formatCurrency(entry.amount)}
-                              </span>
+                              <span className="font-medium text-gray-900">{formatCurrency(entry.amount)}</span>
                             )}
                           </td>
                           <td className="px-4 py-4 text-sm text-gray-600">
@@ -449,9 +407,7 @@ export default function AiCheckPage() {
                               <input
                                 type="text"
                                 value={editForm.notes || ''}
-                                onChange={(e) =>
-                                  setEditForm({ ...editForm, notes: e.target.value })
-                                }
+                                onChange={e => setEditForm({ ...editForm, notes: e.target.value })}
                                 className="input text-sm py-1"
                                 placeholder="備考"
                               />
@@ -459,66 +415,28 @@ export default function AiCheckPage() {
                               entry.notes || '-'
                             )}
                           </td>
-                          <td className="px-4 py-4">
-                            <div className="flex items-center gap-2">
-                              <div className="flex-1 bg-gray-200 rounded-full h-2 overflow-hidden w-20">
-                                <div
-                                  className={`h-full ${
-                                    confidencePct >= 80
-                                      ? 'bg-green-500'
-                                      : confidencePct >= 60
-                                      ? 'bg-yellow-500'
-                                      : 'bg-red-500'
-                                  }`}
-                                  style={{ width: `${confidencePct}%` }}
-                                ></div>
-                              </div>
-                              <span className="text-xs font-medium text-gray-700">
-                                {confidencePct}%
+                          <td className="px-4 py-4 text-sm">
+                            {needsReview ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                                <AlertCircle size={12} />要確認
                               </span>
-                            </div>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                <ShieldCheck size={12} />OK
+                              </span>
+                            )}
                           </td>
                           <td className="px-4 py-4 text-right">
                             {isEditing ? (
-                              <div className="flex items-center justify-end gap-2">
-                                <button
-                                  onClick={() => handleSave(entry)}
-                                  className="p-1 text-green-600 hover:bg-green-50 rounded transition-colors"
-                                  title="保存"
-                                >
-                                  <Save size={18} />
-                                </button>
-                                <button
-                                  onClick={handleCancel}
-                                  className="p-1 text-gray-600 hover:bg-gray-100 rounded transition-colors"
-                                  title="キャンセル"
-                                >
-                                  <X size={18} />
-                                </button>
+                              <div className="flex items-center justify-end gap-1">
+                                <button onClick={() => handleSave(entry)} className="p-1 text-green-600 hover:bg-green-50 rounded" title="保存"><Save size={18} /></button>
+                                <button onClick={handleCancel} className="p-1 text-gray-600 hover:bg-gray-100 rounded" title="キャンセル"><X size={18} /></button>
                               </div>
                             ) : (
-                              <div className="flex items-center justify-end gap-2">
-                                <button
-                                  onClick={() => handleEdit(entry)}
-                                  className="p-1 text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                                  title="編集"
-                                >
-                                  <Edit2 size={18} />
-                                </button>
-                                <button
-                                  onClick={() => handleApprove(entry.id)}
-                                  className="p-1 text-green-600 hover:bg-green-50 rounded transition-colors"
-                                  title="承認"
-                                >
-                                  <CheckCircle size={18} />
-                                </button>
-                                <button
-                                  onClick={() => handleReject(entry.id)}
-                                  className="p-1 text-red-600 hover:bg-red-50 rounded transition-colors"
-                                  title="削除"
-                                >
-                                  <XCircle size={18} />
-                                </button>
+                              <div className="flex items-center justify-end gap-1">
+                                <button onClick={() => handleEdit(entry)} className="p-1 text-blue-600 hover:bg-blue-50 rounded" title="編集"><Edit2 size={16} /></button>
+                                <button onClick={() => handleApprove(entry.id)} className="p-1 text-green-600 hover:bg-green-50 rounded" title="承認"><CheckCircle size={16} /></button>
+                                <button onClick={() => handleReject(entry.id)} className="p-1 text-red-600 hover:bg-red-50 rounded" title="削除"><XCircle size={16} /></button>
                               </div>
                             )}
                           </td>
@@ -535,25 +453,13 @@ export default function AiCheckPage() {
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
             <h3 className="text-sm font-medium text-blue-900 mb-2">操作ガイド</h3>
             <ul className="text-sm text-blue-800 space-y-1 list-disc list-inside">
-              <li>
-                <strong>編集アイコン</strong>: 勘定科目や税区分を修正できます
-              </li>
-              <li>
-                <strong>承認アイコン</strong>: 仕訳を承認して次のステップへ進めます
-              </li>
-              <li>
-                <strong>削除アイコン</strong>: 不要な仕訳を削除します
-              </li>
-              <li>
-                <strong>一括承認</strong>: すべての仕訳をまとめて承認できます
-              </li>
+              <li>黄色の行は要確認の仕訳です（AI信頼度が低い、またはダブルチェックで不一致）</li>
+              <li>「一括承認」で全件をまとめて承認し、次のステップへ進めます</li>
+              <li>個別に編集・承認・削除も可能です</li>
             </ul>
           </div>
         </div>
       </div>
-
-      {/* ナビゲーション */}
-      <WorkflowNavigation onBeforeNext={handleBeforeNext} nextLabel="仕訳確認へ" />
     </div>
   );
 }

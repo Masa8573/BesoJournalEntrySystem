@@ -115,6 +115,52 @@ export const workflowsApi = {
 
     return !error;
   },
+
+  /** キャンセル（中断中のワークフローを停止） */
+  cancel: async (id: string): Promise<boolean> => {
+    const { error } = await supabase
+      .from('workflows')
+      .update({ status: 'cancelled' })
+      .eq('id', id);
+
+    return !error;
+  },
+
+  /** クライアントの進行中ワークフローを全てキャンセル */
+  cancelAllByClient: async (clientId: string): Promise<boolean> => {
+    const { error } = await supabase
+      .from('workflows')
+      .update({ status: 'cancelled' })
+      .eq('client_id', clientId)
+      .eq('status', 'in_progress');
+
+    return !error;
+  },
+
+  /** ワークフロー履歴を取得（clients.tsx のステータス表示用） */
+  getHistoryByClient: async (clientId: string): Promise<Array<{
+    id: string;
+    status: string;
+    currentStep: number;
+    createdAt: string;
+    updatedAt: string;
+  }>> => {
+    const { data, error } = await supabase
+      .from('workflows')
+      .select('id, status, current_step, created_at, updated_at')
+      .eq('client_id', clientId)
+      .order('created_at', { ascending: false })
+      .limit(5);
+
+    if (error || !data) return [];
+    return data.map((row: any) => ({
+      id: row.id,
+      status: row.status,
+      currentStep: row.current_step,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+  },
 };
 
 // ============================================
@@ -156,13 +202,12 @@ export function getStepName(step: number): string {
 // 新URL構造: /clients/:id/upload 等
 // ============================================
 export function getStepPath(step: number, clientId?: string): string {
-  if (!clientId) {
+  if (!clientId || step <= 1) {
     return '/clients';
   }
 
-  // step 1 = アップロード（ワークフロー開始直後は必ずuploadへ）
   const stepSlugs: Record<number, string> = {
-    1: 'upload',
+    1: '',          // step 1 は顧客選択 = /clients
     2: 'upload',
     3: 'ocr',
     4: 'aicheck',

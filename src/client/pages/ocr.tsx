@@ -3,8 +3,7 @@ import { CheckCircle, AlertCircle, Loader } from 'lucide-react';
 import { useWorkflow } from '@/client/context/WorkflowContext';
 import { supabase } from '@/client/lib/supabase';
 import { documentsApi } from '@/client/lib/api';
-import ProgressBar from '@/client/components/workflow/ProgressBar';
-import WorkflowNavigation from '@/client/components/workflow/WorkflowNavigation';
+import WorkflowHeader from '@/client/components/workflow/WorkflowHeader';
 
 interface OCRResult {
   id: string;
@@ -12,10 +11,9 @@ interface OCRResult {
   fileName: string;
   storagePath: string;
   status: 'pending' | 'processing' | 'completed' | 'error';
-  confidence?: number;
   processedAt?: string;
   errorMessage?: string;
-  journalEntryId?: string; // 生成された仕訳のDB ID
+  journalEntryId?: string;
 }
 
 // Express API のベースURL
@@ -37,7 +35,6 @@ export default function OCRPage() {
     if (documentIds.length === 0) return;
 
     const initResults = async () => {
-      // documents テーブルから詳細を取得
       const results: OCRResult[] = [];
       for (const docId of documentIds) {
         const { data: doc } = await documentsApi.getById(docId);
@@ -48,12 +45,10 @@ export default function OCRPage() {
             fileName: doc.original_file_name || doc.file_name,
             storagePath: doc.storage_path || doc.file_path,
             status: doc.ocr_status === 'completed' ? 'completed' : 'pending',
-            confidence: doc.ocr_confidence ? doc.ocr_confidence * 100 : undefined,
           });
         }
       }
 
-      // クライアントの業種を取得
       const clientId = currentWorkflow.clientId;
       const { data: client } = await supabase
         .from('clients')
@@ -79,7 +74,7 @@ export default function OCRPage() {
 
     for (let i = 0; i < ocrResults.length; i++) {
       const result = ocrResults[i];
-      if (result.status === 'completed') continue; // スキップ（再処理不要）
+      if (result.status === 'completed') continue;
 
       // 処理中に更新
       setOcrResults((prev) =>
@@ -87,20 +82,16 @@ export default function OCRPage() {
       );
 
       try {
-        // -----------------------------------------------
-        // STEP 1: Storage から署名付き URL を取得してサーバーへ渡す
-        // -----------------------------------------------
+        // STEP 1: Storage から署名付き URL を取得
         const { data: signedUrlData, error: urlError } = await supabase.storage
           .from('documents')
-          .createSignedUrl(result.storagePath, 300); // 5分有効
+          .createSignedUrl(result.storagePath, 300);
 
         if (urlError || !signedUrlData?.signedUrl) {
           throw new Error('ファイルURLの取得に失敗しました');
         }
 
-        // -----------------------------------------------
         // STEP 2: OCR API 呼び出し
-        // -----------------------------------------------
         const ocrResponse = await fetch(`${API_BASE}/api/ocr/process`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -119,9 +110,7 @@ export default function OCRPage() {
         const ocrData = await ocrResponse.json();
         const ocrResult = ocrData.ocr_result;
 
-        // -----------------------------------------------
         // STEP 3: OCR 結果を documents テーブルに保存
-        // -----------------------------------------------
         await documentsApi.update(result.documentId, {
           ocr_status: 'completed',
           ocr_confidence: ocrResult.confidence_score,
@@ -132,10 +121,7 @@ export default function OCRPage() {
           status: 'ocr_completed',
         } as any);
 
-        // -----------------------------------------------
         // STEP 4: 仕訳生成 API 呼び出し
-        // サーバー側でマスタ取得 + AI生成 + UUIDマッピングまで実行
-        // -----------------------------------------------
         const journalResponse = await fetch(`${API_BASE}/api/journal-entries/generate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -155,9 +141,7 @@ export default function OCRPage() {
         const journalData = await journalResponse.json();
         const journalEntry = journalData.journal_entry;
 
-        // -----------------------------------------------
         // STEP 5: 仕訳ヘッダーを journal_entries テーブルに保存
-        // -----------------------------------------------
         const { data: savedEntry, error: dbSaveError } = await supabase
           .from('journal_entries')
           .insert({
@@ -176,12 +160,9 @@ export default function OCRPage() {
 
         if (dbSaveError) {
           console.error('仕訳ヘッダー保存エラー:', dbSaveError);
-          // ヘッダー保存失敗でもOCR完了として処理続行
         }
 
-        // -----------------------------------------------
         // STEP 5b: 仕訳明細行を journal_entry_lines テーブルに保存
-        // -----------------------------------------------
         if (savedEntry && journalEntry.lines && journalEntry.lines.length > 0) {
           const linesToInsert = journalEntry.lines.map((line: any, idx: number) => ({
             journal_entry_id: savedEntry.id,
@@ -204,23 +185,18 @@ export default function OCRPage() {
           }
         }
 
-        // -----------------------------------------------
         // STEP 6: documents ステータスを更新
-        // -----------------------------------------------
         await documentsApi.update(result.documentId, {
           status: 'ai_processing',
         } as any);
 
-        // -----------------------------------------------
         // STEP 7: 進捗を更新（完了）
-        // -----------------------------------------------
         setOcrResults((prev) =>
           prev.map((r) =>
             r.id === result.id
               ? {
                   ...r,
                   status: 'completed',
-                  confidence: Math.round((ocrResult.confidence_score || 0.85) * 100),
                   processedAt: new Date().toISOString(),
                   journalEntryId: savedEntry?.id,
                 }
@@ -230,7 +206,6 @@ export default function OCRPage() {
       } catch (error: any) {
         console.error(`OCR エラー (${result.fileName}):`, error);
 
-        // documents テーブルのステータスをエラーに更新
         await documentsApi.update(result.documentId, {
           ocr_status: 'error',
           status: 'uploaded',
@@ -239,11 +214,7 @@ export default function OCRPage() {
         setOcrResults((prev) =>
           prev.map((r) =>
             r.id === result.id
-              ? {
-                  ...r,
-                  status: 'error',
-                  errorMessage: error.message,
-                }
+              ? { ...r, status: 'error', errorMessage: error.message }
               : r
           )
         );
@@ -257,7 +228,6 @@ export default function OCRPage() {
   // 次へ進む前の検証
   // ============================================
   const handleBeforeNext = async (): Promise<boolean> => {
-    const hasError = ocrResults.some((r) => r.status === 'error');
     const hasNotCompleted = ocrResults.some(
       (r) => r.status === 'pending' || r.status === 'processing'
     );
@@ -267,6 +237,7 @@ export default function OCRPage() {
       return false;
     }
 
+    const hasError = ocrResults.some((r) => r.status === 'error');
     if (hasError) {
       const proceed = window.confirm(
         'エラーの証憑があります。エラー件数: ' +
@@ -276,7 +247,6 @@ export default function OCRPage() {
       if (!proceed) return false;
     }
 
-    // 完了した OCR 結果の ID をワークフローに保存
     const completedIds = ocrResults
       .filter((r) => r.status === 'completed')
       .map((r) => r.id);
@@ -295,9 +265,6 @@ export default function OCRPage() {
   const errorCount = ocrResults.filter((r) => r.status === 'error').length;
   const totalCount = ocrResults.length;
 
-  // 進捗率（実際の完了件数 / 総件数）
-  const progressPercent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
-
   const allCompleted =
     totalCount > 0 && ocrResults.every((r) => r.status === 'completed' || r.status === 'error');
 
@@ -309,15 +276,9 @@ export default function OCRPage() {
       <div className="flex flex-col items-center justify-center h-full">
         <div className="text-center max-w-md">
           <AlertCircle size={64} className="text-yellow-500 mx-auto mb-4" />
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">
-            ワークフローが開始されていません
-          </h2>
-          <p className="text-gray-600 mb-6">
-            OCR処理を行うには、顧客一覧からワークフローを開始してください。
-          </p>
-          <a href="/clients" className="btn-primary">
-            顧客一覧へ戻る
-          </a>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">ワークフローが開始されていません</h2>
+          <p className="text-gray-600 mb-6">OCR処理を行うには、顧客一覧からワークフローを開始してください。</p>
+          <a href="/clients" className="btn-primary">顧客一覧へ戻る</a>
         </div>
       </div>
     );
@@ -325,19 +286,12 @@ export default function OCRPage() {
 
   return (
     <div className="flex flex-col h-screen">
-      {/* 進捗バー */}
-      <ProgressBar />
+      {/* ワークフローヘッダー（進捗 + ナビゲーション統合・上部配置） */}
+      <WorkflowHeader onBeforeNext={handleBeforeNext} nextLabel="AIチェックへ" />
 
       {/* メインコンテンツ */}
       <div className="flex-1 overflow-y-auto p-6">
         <div className="max-w-5xl mx-auto space-y-6">
-          {/* ページヘッダー */}
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">OCR処理</h1>
-            <p className="text-sm text-gray-500 mt-1">
-              {currentWorkflow.clientName}さんの証憑を自動読み取りします
-            </p>
-          </div>
 
           {/* サマリーカード */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -348,7 +302,6 @@ export default function OCRPage() {
               </div>
               <div className="text-3xl font-bold text-gray-900">{totalCount}</div>
             </div>
-
             <div className="card">
               <div className="flex items-center gap-2 mb-2">
                 <CheckCircle size={20} className="text-green-500" />
@@ -356,7 +309,6 @@ export default function OCRPage() {
               </div>
               <div className="text-3xl font-bold text-gray-900">{completedCount}</div>
             </div>
-
             <div className="card">
               <div className="flex items-center gap-2 mb-2">
                 <Loader size={20} className="text-orange-500" />
@@ -364,7 +316,6 @@ export default function OCRPage() {
               </div>
               <div className="text-3xl font-bold text-gray-900">{processingCount}</div>
             </div>
-
             <div className="card">
               <div className="flex items-center gap-2 mb-2">
                 <AlertCircle size={20} className="text-red-500" />
@@ -386,10 +337,9 @@ export default function OCRPage() {
               <div className="w-full bg-gray-200 rounded-full h-3">
                 <div
                   className="bg-blue-600 h-3 rounded-full transition-all duration-300"
-                  style={{ width: `${progressPercent}%` }}
+                  style={{ width: `${totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0}%` }}
                 ></div>
               </div>
-              <p className="text-xs text-gray-500 mt-1 text-right">{progressPercent}%</p>
             </div>
           )}
 
@@ -413,78 +363,67 @@ export default function OCRPage() {
             </div>
           )}
 
-          {/* 処理状況 */}
+          {/* 処理状況（信頼度パーセント削除、処理中/完了のステータスのみ） */}
           {ocrResults.length > 0 && (
             <div className="card">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">処理状況</h2>
 
-              <div className="space-y-3">
+              <div className="space-y-2">
                 {ocrResults.map((result) => (
                   <div
                     key={result.id}
-                    className="flex items-center gap-4 p-4 bg-gray-50 rounded-lg border border-gray-200"
+                    className={`flex items-center gap-4 p-3 rounded-lg border ${
+                      result.status === 'completed'
+                        ? 'bg-green-50 border-green-200'
+                        : result.status === 'error'
+                        ? 'bg-red-50 border-red-200'
+                        : result.status === 'processing'
+                        ? 'bg-blue-50 border-blue-200'
+                        : 'bg-gray-50 border-gray-200'
+                    }`}
                   >
-                    {/* ファイル名 */}
-                    <div className="flex-1">
-                      <p className="text-sm font-medium text-gray-900">{result.fileName}</p>
-                      {result.processedAt && (
-                        <p className="text-xs text-gray-500">
-                          処理完了: {new Date(result.processedAt).toLocaleString('ja-JP')}
-                        </p>
+                    {/* ステータスアイコン */}
+                    <div className="flex-shrink-0">
+                      {result.status === 'pending' && (
+                        <div className="w-6 h-6 rounded-full bg-gray-200"></div>
                       )}
-                      {result.errorMessage && (
-                        <p className="text-xs text-red-500">{result.errorMessage}</p>
+                      {result.status === 'processing' && (
+                        <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
                       )}
-                      {result.journalEntryId && (
-                        <p className="text-xs text-green-600">
-                          仕訳生成完了
-                        </p>
+                      {result.status === 'completed' && (
+                        <CheckCircle size={22} className="text-green-500" />
+                      )}
+                      {result.status === 'error' && (
+                        <AlertCircle size={22} className="text-red-500" />
                       )}
                     </div>
 
-                    {/* 信頼度 */}
-                    {result.confidence !== undefined && (
-                      <div className="flex items-center gap-2">
-                        <div className="w-24 bg-gray-200 rounded-full h-2">
-                          <div
-                            className={`h-2 rounded-full ${
-                              result.confidence >= 90
-                                ? 'bg-green-500'
-                                : result.confidence >= 70
-                                ? 'bg-yellow-500'
-                                : 'bg-red-500'
-                            }`}
-                            style={{ width: `${result.confidence}%` }}
-                          ></div>
-                        </div>
-                        <span className="text-xs font-medium text-gray-700">
-                          {result.confidence}%
-                        </span>
-                      </div>
-                    )}
+                    {/* ファイル名 */}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">{result.fileName}</p>
+                      {result.processedAt && (
+                        <p className="text-xs text-gray-500">
+                          {new Date(result.processedAt).toLocaleTimeString('ja-JP')} 完了
+                        </p>
+                      )}
+                      {result.errorMessage && (
+                        <p className="text-xs text-red-600">{result.errorMessage}</p>
+                      )}
+                    </div>
 
-                    {/* ステータスバッジ */}
-                    <div className="flex items-center gap-2">
+                    {/* ステータスラベル */}
+                    <div>
                       {result.status === 'pending' && (
-                        <span className="badge badge-gray">待機中</span>
+                        <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">待機中</span>
                       )}
                       {result.status === 'processing' && (
-                        <div className="flex items-center gap-2">
-                          <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                          <span className="badge badge-blue">処理中</span>
-                        </div>
+                        <span className="text-xs text-blue-700 bg-blue-100 px-2 py-1 rounded font-medium">処理中...</span>
                       )}
                       {result.status === 'completed' && (
-                        <div className="flex items-center gap-2">
-                          <CheckCircle size={20} className="text-green-500" />
-                          <span className="badge badge-green">完了</span>
-                        </div>
+                        <span className="text-xs text-green-700 bg-green-100 px-2 py-1 rounded font-medium">完了</span>
                       )}
                       {result.status === 'error' && (
-                        <div className="flex items-center gap-2">
-                          <AlertCircle size={20} className="text-red-500" />
-                          <span className="badge badge-red">エラー</span>
-                        </div>
+                        <span className="text-xs text-red-700 bg-red-100 px-2 py-1 rounded font-medium">エラー</span>
                       )}
                     </div>
                   </div>
@@ -501,7 +440,7 @@ export default function OCRPage() {
                 <div>
                   <h3 className="font-semibold text-green-900">OCR処理・仕訳生成が完了しました</h3>
                   <p className="text-sm text-green-700">
-                    {completedCount}件を処理しました。次のステップに進んでください。
+                    {completedCount}件を処理しました。「→」キーまたは上部の「AIチェックへ」で次に進んでください。
                     {errorCount > 0 && ` (${errorCount}件はエラーのため除外)`}
                   </p>
                 </div>
@@ -513,19 +452,12 @@ export default function OCRPage() {
           {ocrResults.length === 0 && (
             <div className="card text-center py-12">
               <AlertCircle size={64} className="text-gray-300 mx-auto mb-4" />
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                処理するファイルがありません
-              </h3>
-              <p className="text-sm text-gray-500 mb-4">
-                前のステップで証憑をアップロードしてください
-              </p>
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">処理するファイルがありません</h3>
+              <p className="text-sm text-gray-500 mb-4">前のステップで証憑をアップロードしてください</p>
             </div>
           )}
         </div>
       </div>
-
-      {/* ナビゲーション */}
-      <WorkflowNavigation onBeforeNext={handleBeforeNext} nextLabel="AIチェックへ" />
     </div>
   );
 }

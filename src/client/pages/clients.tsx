@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
-import { Search, Plus, Edit, Trash2, Play, RotateCcw } from 'lucide-react';
+import { Search, Plus, Edit, Trash2, Play, RotateCcw, X, AlertTriangle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useWorkflow } from '@/client/context/WorkflowContext';
 import type { Client, Industry } from '@/types';
 import Modal from '@/client/components/ui/Modal';
 import { supabase } from '@/client/lib/supabase';
+import { workflowsApi } from '@/client/lib/workflowStorage';
 
 // workflowsテーブルから取得するための型（最小限）
 interface ActiveWorkflow {
@@ -14,7 +15,6 @@ interface ActiveWorkflow {
   status: string;
   data: Record<string, unknown>;
   updated_at: string;
-  // clients.tsxで表示に使う
   clientName?: string;
 }
 
@@ -51,7 +51,7 @@ interface BulkRow {
 
 export default function ClientsPage() {
   const navigate = useNavigate();
-  const { resumeWorkflow } = useWorkflow();  // ← startWorkflow/getAllWorkflows を削除
+  const { resumeWorkflow, startWorkflow } = useWorkflow();
 
   const [clients, setClients] = useState<ClientWithIndustry[]>([]);
   const [industries, setIndustries] = useState<Industry[]>([]);
@@ -61,6 +61,7 @@ export default function ClientsPage() {
   const [showModal, setShowModal] = useState(false);
   const [editingClient, setEditingClient] = useState<ClientWithIndustry | null>(null);
   const [modalTab, setModalTab] = useState<'single' | 'bulk'>('single');
+  const [cancellingWorkflowId, setCancellingWorkflowId] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -103,7 +104,6 @@ export default function ClientsPage() {
     if (data) setIndustries(data as Industry[]);
   };
 
-  // 進行中ワークフローをSupabaseから取得
   const loadActiveWorkflows = async () => {
     const { data } = await supabase
       .from('workflows')
@@ -124,6 +124,43 @@ export default function ClientsPage() {
   const getWorkflowForClient = (clientId: string) =>
     activeWorkflows.find(w => w.client_id === clientId);
 
+  // ============================================
+  // ワークフロー中断（キャンセル）
+  // ============================================
+  const handleCancelWorkflow = async (wf: ActiveWorkflow) => {
+    setCancellingWorkflowId(wf.id);
+  };
+
+  const confirmCancelWorkflow = async () => {
+    if (!cancellingWorkflowId) return;
+    const success = await workflowsApi.cancel(cancellingWorkflowId);
+    if (success) {
+      setCancellingWorkflowId(null);
+      loadActiveWorkflows();
+    } else {
+      alert('ワークフローの中断に失敗しました');
+    }
+  };
+
+  // ============================================
+  // ワークフローやり直し（キャンセル → 新規開始）
+  // ============================================
+  const handleRestartWorkflow = async (client: ClientWithIndustry) => {
+    const wf = getWorkflowForClient(client.id);
+    if (wf) {
+      const confirmed = window.confirm(
+        `「${client.name}」の進行中ワークフローを破棄してやり直しますか？\n\n現在のステップ: ${wf.current_step}/8\n\n※ アップロード済みの証憑データは保持されますが、仕訳データはリセットされます。`
+      );
+      if (!confirmed) return;
+      await workflowsApi.cancel(wf.id);
+    }
+    // 新規ワークフロー開始
+    await startWorkflow(client.id, client.name);
+  };
+
+  // ============================================
+  // モーダル操作
+  // ============================================
   const handleOpenNewModal = () => {
     setEditingClient(null);
     setModalTab('single');
@@ -224,6 +261,12 @@ export default function ClientsPage() {
     return `¥${amount.toLocaleString()}`;
   };
 
+  // ステップ名のヘルパー
+  const getStepLabel = (step: number): string => {
+    const names = ['', '顧客選択', 'アップロード', 'OCR', 'AIチェック', '仕訳確認', '仕訳出力', '集計', '対象外'];
+    return names[step] || '';
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -260,19 +303,31 @@ export default function ClientsPage() {
                 <div className="flex-1">
                   <h3 className="font-semibold text-gray-900 mb-1">{wf.clientName}</h3>
                   <div className="flex items-center gap-4 text-sm text-gray-500">
-                    <span>現在: ステップ {wf.current_step}/8</span>
+                    <span>
+                      現在: <span className="font-medium text-gray-700">{getStepLabel(wf.current_step)}</span>（{wf.current_step}/8）
+                    </span>
                     <span>最終更新: {new Date(wf.updated_at).toLocaleString('ja-JP')}</span>
                   </div>
                   <div className="mt-2 w-full bg-gray-200 rounded-full h-2">
-                    <div className="bg-blue-600 h-2 rounded-full" style={{ width: `${(wf.current_step / 8) * 100}%` }} />
+                    <div className="bg-blue-600 h-2 rounded-full transition-all" style={{ width: `${(wf.current_step / 8) * 100}%` }} />
                   </div>
                 </div>
-                <div className="ml-4">
+                <div className="ml-4 flex items-center gap-2">
+                  {/* 中断ボタン */}
+                  <button
+                    onClick={() => handleCancelWorkflow(wf)}
+                    className="flex items-center gap-1.5 px-3 py-2 text-sm text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors"
+                    title="ワークフローを中断"
+                  >
+                    <X size={15} />
+                    <span>中断</span>
+                  </button>
+                  {/* 続きからボタン */}
                   <button
                     onClick={() => resumeWorkflow(wf.id)}
-                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors"
                   >
-                    <RotateCcw size={16} />続きから
+                    <RotateCcw size={15} />続きから
                   </button>
                 </div>
               </div>
@@ -327,21 +382,33 @@ export default function ClientsPage() {
                   return (
                     <tr key={client.id} className="hover:bg-gray-50">
                       <td className="px-4 py-4 whitespace-nowrap">
-                        {hasWf ? (
-                          <button
-                            onClick={() => resumeWorkflow(wf.id)}
-                            className="flex items-center gap-1 px-3 py-1.5 bg-orange-500 text-white text-xs font-medium rounded hover:bg-orange-600"
-                          >
-                            <RotateCcw size={14} />続きから
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => handleStart(client)}
-                            className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700"
-                          >
-                            <Play size={14} />開始
-                          </button>
-                        )}
+                        <div className="flex items-center gap-1">
+                          {hasWf ? (
+                            <>
+                              <button
+                                onClick={() => resumeWorkflow(wf.id)}
+                                className="flex items-center gap-1 px-2.5 py-1.5 bg-orange-500 text-white text-xs font-medium rounded hover:bg-orange-600"
+                                title="続きから再開"
+                              >
+                                <RotateCcw size={13} />続き
+                              </button>
+                              <button
+                                onClick={() => handleRestartWorkflow(client)}
+                                className="flex items-center gap-1 px-2.5 py-1.5 bg-red-50 text-red-600 text-xs font-medium rounded border border-red-200 hover:bg-red-100"
+                                title="やり直し（現在の進捗をリセット）"
+                              >
+                                <X size={13} />やり直し
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              onClick={() => handleStart(client)}
+                              className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700"
+                            >
+                              <Play size={14} />開始
+                            </button>
+                          )}
+                        </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <button
@@ -374,7 +441,7 @@ export default function ClientsPage() {
                       <td className="px-6 py-4 whitespace-nowrap">
                         {hasWf ? (
                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
-                            進行中 (Step {wf.current_step}/8)
+                            {getStepLabel(wf.current_step)} ({wf.current_step}/8)
                           </span>
                         ) : (
                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
@@ -414,6 +481,41 @@ export default function ClientsPage() {
           </div>
         )}
       </div>
+
+      {/* ワークフロー中断確認モーダル */}
+      <Modal
+        isOpen={!!cancellingWorkflowId}
+        onClose={() => setCancellingWorkflowId(null)}
+        title="ワークフローを中断しますか？"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 p-3 bg-red-50 rounded-lg">
+            <AlertTriangle size={20} className="text-red-500 flex-shrink-0 mt-0.5" />
+            <div className="text-sm text-red-700">
+              <p className="font-medium mb-1">この操作について：</p>
+              <p>ワークフローを中断すると、進捗状況がリセットされます。</p>
+              <p className="mt-1">アップロード済みの証憑やDBに保存された仕訳データは保持されますが、ワークフローの状態は「中断」に変わります。</p>
+              <p className="mt-1">同じ顧客で新しいワークフローを開始できます。</p>
+            </div>
+          </div>
+          <div className="flex justify-end gap-3">
+            <button
+              onClick={() => setCancellingWorkflowId(null)}
+              className="btn-secondary"
+            >
+              キャンセル
+            </button>
+            <button
+              onClick={confirmCancelWorkflow}
+              className="flex items-center gap-1.5 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm font-medium"
+            >
+              <X size={15} />
+              中断する
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       {/* 登録モーダル */}
       <Modal
