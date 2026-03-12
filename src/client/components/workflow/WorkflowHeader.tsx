@@ -1,5 +1,5 @@
 import { useEffect, useCallback } from 'react';
-import { ArrowLeft, ArrowRight, Save, CheckCircle, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Save, CheckCircle } from 'lucide-react';
 import { useWorkflow } from '@/client/context/WorkflowContext';
 import { getStepName } from '@/client/lib/workflowStorage';
 

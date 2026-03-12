@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   ZoomOut, ZoomIn, RotateCcw, ChevronLeft, ChevronRight,
-  ChevronDown, Ban, AlertCircle, Loader, CheckCircle, Save, Plus
+  ChevronDown, Ban, AlertCircle, Loader, CheckCircle, Save
 } from 'lucide-react';
 import { useWorkflow } from '@/client/context/WorkflowContext';
 import { supabase } from '@/client/lib/supabase';
@@ -58,7 +58,6 @@ export default function ReviewPage() {
   const [taxCategories, setTaxCategories] = useState<TaxCategory[]>([]);
   const [taxRates, setTaxRates] = useState<TaxRateOption[]>([]);
   const [supplierTags, setSupplierTags] = useState<Tag[]>([]);
-  const [itemTags, setItemTags] = useState<Tag[]>([]);
   const [industries, setIndustries] = useState<Array<{ id: string; name: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -182,7 +181,6 @@ export default function ReviewPage() {
       .order('name');
     if (tags) {
       setSupplierTags(tags.filter((t: any) => t.tag_type === 'supplier'));
-      setItemTags(tags.filter((t: any) => t.tag_type === 'item'));
     }
 
     // 業種取得（ルール追加用）
@@ -497,7 +495,7 @@ export default function ReviewPage() {
               <div className="space-y-1">
                 <label className="text-xs font-medium">取引先タグ</label>
                 <div className="relative">
-                  <select value="" onChange={e => { /* TODO: タグ紐付け処理 */ }}
+                  <select value="" onChange={() => { /* TODO: タグ紐付け処理 */ }}
                     className="w-full border border-gray-300 rounded-md p-2 pr-7 appearance-none text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
                     <option value="">-- 選択 --</option>
                     {supplierTags.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
