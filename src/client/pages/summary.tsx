@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { Plus, Upload, FileOutput, FileX, ArrowLeft, Building2, Receipt, Calendar, CheckCircle, Clock, AlertCircle } from 'lucide-react';
+import { Plus, Upload, FileOutput, FileX, ArrowLeft, Building2, Receipt, Calendar, CheckCircle, Clock, AlertCircle, Loader } from 'lucide-react';
 import { supabase } from '@/client/lib/supabase';
+import { useWorkflow } from '@/client/context/WorkflowContext';
 import type { Client, Industry } from '@/types';
 
 interface WorkflowLog {
@@ -53,9 +54,11 @@ function formatCurrency(amount: number | null | undefined): string {
 export default function SummaryPage() {
   const { id: clientId } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { startWorkflow, currentWorkflow } = useWorkflow();
   const [client, setClient] = useState<ClientDetail | null>(null);
   const [workflows, setWorkflows] = useState<WorkflowLog[]>([]);
   const [loading, setLoading] = useState(true);
+  const [starting, setStarting] = useState(false);
 
   useEffect(() => {
     if (clientId) loadData(clientId);
@@ -186,10 +189,17 @@ export default function SummaryPage() {
           <p className="text-sm text-gray-500 mt-0.5">顧客詳細・業務ログ</p>
         </div>
         <button
-          onClick={() => navigate(`/clients/${clientId}/upload`)}
-          className="flex items-center gap-2 btn-primary"
+          onClick={async () => {
+            if (!client || !clientId) return;
+            setStarting(true);
+            await startWorkflow(clientId, client.name);
+            setStarting(false);
+          }}
+          disabled={starting}
+          className="flex items-center gap-2 btn-primary disabled:opacity-60"
         >
-          <Plus size={18} />新規ワークフロー開始
+          {starting ? <Loader size={18} className="animate-spin" /> : <Plus size={18} />}
+          新規ワークフロー開始
         </button>
       </div>
 
@@ -234,23 +244,48 @@ export default function SummaryPage() {
 
       {/* クイックアクション */}
       <div className="grid grid-cols-3 gap-4">
+        {/* アップロード = 新規ワークフロー開始 */}
+        <button
+          onClick={async () => {
+            if (!client || !clientId) return;
+            setStarting(true);
+            await startWorkflow(clientId, client.name);
+            setStarting(false);
+          }}
+          disabled={starting}
+          className="flex items-center gap-3 p-4 rounded-lg border transition-colors text-left text-blue-600 bg-blue-50 hover:bg-blue-100 border-blue-200 disabled:opacity-60"
+        >
+          {starting ? <Loader size={20} className="animate-spin" /> : <Upload size={20} />}
+          <div>
+            <p className="text-sm font-semibold">アップロード</p>
+            <p className="text-xs opacity-75">新規ワークフロー開始</p>
+          </div>
+        </button>
+
+        {/* エクスポート・対象外 = 既存ワークフローがある場合のみ */}
         {[
-          { icon: <Upload size={20} />, label: 'アップロード', desc: '証憑をアップロード', href: `/clients/${clientId}/upload`, color: 'text-blue-600 bg-blue-50 hover:bg-blue-100 border-blue-200' },
-          { icon: <FileOutput size={20} />, label: 'エクスポート', desc: 'freeeに出力', href: `/clients/${clientId}/export`, color: 'text-green-600 bg-green-50 hover:bg-green-100 border-green-200' },
-          { icon: <FileX size={20} />, label: '対象外証憑', desc: '除外された証憑', href: `/clients/${clientId}/excluded`, color: 'text-red-600 bg-red-50 hover:bg-red-100 border-red-200' },
-        ].map(item => (
-          <Link
-            key={item.label}
-            to={item.href}
-            className={`flex items-center gap-3 p-4 rounded-lg border transition-colors ${item.color}`}
-          >
-            {item.icon}
-            <div>
-              <p className="text-sm font-semibold">{item.label}</p>
-              <p className="text-xs opacity-75">{item.desc}</p>
-            </div>
-          </Link>
-        ))}
+          { icon: <FileOutput size={20} />, label: 'エクスポート', desc: 'freeeに出力', slug: 'export', color: 'text-green-600 bg-green-50 hover:bg-green-100 border-green-200' },
+          { icon: <FileX size={20} />, label: '対象外証憑', desc: '除外された証憑', slug: 'excluded', color: 'text-red-600 bg-red-50 hover:bg-red-100 border-red-200' },
+        ].map(item => {
+          // 進行中のワークフローがあればリンク有効
+          const activeWf = workflows.find(w => w.status === 'in_progress');
+          const href = activeWf ? `/clients/${clientId}/${item.slug}` : '#';
+          const disabled = !activeWf;
+          return (
+            <Link
+              key={item.label}
+              to={href}
+              onClick={(e) => { if (disabled) e.preventDefault(); }}
+              className={`flex items-center gap-3 p-4 rounded-lg border transition-colors ${disabled ? 'opacity-50 cursor-not-allowed bg-gray-50 border-gray-200 text-gray-400' : item.color}`}
+            >
+              {item.icon}
+              <div>
+                <p className="text-sm font-semibold">{item.label}</p>
+                <p className="text-xs opacity-75">{disabled ? '進行中のワークフローなし' : item.desc}</p>
+              </div>
+            </Link>
+          );
+        })}
       </div>
 
       {/* 業務ログ */}
@@ -265,8 +300,14 @@ export default function SummaryPage() {
             <Calendar size={40} className="mx-auto mb-3 text-gray-300" />
             <p className="text-sm">まだ処理履歴がありません</p>
             <button
-              onClick={() => navigate(`/clients/${clientId}/upload`)}
-              className="mt-4 btn-primary text-sm"
+              onClick={async () => {
+                if (!client || !clientId) return;
+                setStarting(true);
+                await startWorkflow(clientId, client.name);
+                setStarting(false);
+              }}
+              disabled={starting}
+              className="mt-4 btn-primary text-sm disabled:opacity-60"
             >
               最初のワークフローを開始する
             </button>

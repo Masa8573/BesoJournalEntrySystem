@@ -50,6 +50,7 @@ function Sidebar() {
   };
 
   const isActive = (path: string) => location.pathname === path;
+  const isActivePrefix = (prefix: string) => location.pathname.startsWith(prefix);
 
   // ワークフロー系の動的パスを生成するヘルパー
   const workflowPath = (slug: string) =>
