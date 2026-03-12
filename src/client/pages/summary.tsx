@@ -54,7 +54,7 @@ function formatCurrency(amount: number | null | undefined): string {
 export default function SummaryPage() {
   const { id: clientId } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { startWorkflow, currentWorkflow } = useWorkflow();
+  const { startWorkflow } = useWorkflow();
   const [client, setClient] = useState<ClientDetail | null>(null);
   const [workflows, setWorkflows] = useState<WorkflowLog[]>([]);
   const [loading, setLoading] = useState(true);
