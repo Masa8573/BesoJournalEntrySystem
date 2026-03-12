@@ -516,7 +516,8 @@ router.get('/health', async (req: Request, res: Response) => {
     timestamp: new Date().toISOString(),
     gemini: {
       configured: !!process.env.GEMINI_API_KEY,
-      model: process.env.GEMINI_MODEL || 'gemini-3.1-pro-preview',
+      model_ocr: process.env.GEMINI_MODEL_OCR || 'gemini-3-flash-preview',
+      model_journal: process.env.GEMINI_MODEL_JOURNAL || 'gemini-3.1-pro-preview',
     },
     supabase: {
       url_set: !!supabaseUrl,

@@ -35,7 +35,6 @@ export default function WorkflowHeader({
     canGoToNextStep,
     canGoToPreviousStep,
     isStepComplete,
-    markCurrentStepComplete,
   } = useWorkflow();
 
   // ============================================
@@ -47,9 +46,10 @@ export default function WorkflowHeader({
       const canProceed = await onBeforeNext();
       if (!canProceed) return;
     }
-    markCurrentStepComplete();
+    // goToNextStep() 内部で現ステップを completedSteps に追加するため
+    // markCurrentStepComplete() は呼ばない（二重実行防止）
     goToNextStep();
-  }, [canGoToNextStep, onBeforeNext, markCurrentStepComplete, goToNextStep]);
+  }, [canGoToNextStep, onBeforeNext, goToNextStep]);
 
   const handlePrev = useCallback(() => {
     if (canGoToPreviousStep()) goToPreviousStep();
@@ -79,7 +79,6 @@ export default function WorkflowHeader({
   // ============================================
   const handleComplete = () => {
     if (window.confirm('ワークフローを完了しますか？')) {
-      markCurrentStepComplete();
       completeWorkflow();
     }
   };

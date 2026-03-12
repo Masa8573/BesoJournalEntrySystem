@@ -3,8 +3,11 @@ import { GoogleGenAI } from '@google/genai';
 // Gemini APIクライアントの初期化（新SDK: @google/genai）
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
-// 使用モデル（環境変数で切替可能）
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.1-pro-preview';
+// 使用モデル（用途別に分離）
+// OCR: Flash（高速・低コスト・マルチモーダルに強い）
+// 仕訳生成: Pro（推論・判断に強い）
+const GEMINI_MODEL_OCR = process.env.GEMINI_MODEL_OCR || 'gemini-3-flash-preview';
+const GEMINI_MODEL_JOURNAL = process.env.GEMINI_MODEL_JOURNAL || 'gemini-3.1-pro-preview';
 
 // ============================================
 // OCRサービス - 画像から文字を抽出
@@ -133,7 +136,7 @@ export async function processOCR(imageUrl: string): Promise<OCRResult> {
 - 支払方法は「現金」「カード」「振込」「電子マネー」等の記載から判定`;
 
     const result = await ai.models.generateContent({
-      model: GEMINI_MODEL,
+      model: GEMINI_MODEL_OCR,
       contents: [
         {
           role: 'user',
@@ -338,7 +341,7 @@ ${taxCategoryList}
 JSONのみを返してください。`;
 
     const result = await ai.models.generateContent({
-      model: GEMINI_MODEL,
+      model: GEMINI_MODEL_JOURNAL,
       contents: prompt,
     });
 

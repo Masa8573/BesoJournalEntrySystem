@@ -67,159 +67,189 @@ export default function OCRPage() {
   }, [currentWorkflow]);
 
   // ============================================
-  // OCR + 仕訳生成 処理（1件ずつ順次処理）
+  // OCR + 仕訳生成 処理（並列処理・セマフォ制御）
   // ============================================
+
+  // 同時並列数（Gemini API レート制限を考慮: 3.1 Flash は RPM が高い）
+  const CONCURRENCY = 5;
+
+  /** 1件分の OCR → 仕訳生成 → DB保存 処理 */
+  const processOneDocument = async (result: OCRResult) => {
+    // 処理中に更新
+    setOcrResults((prev) =>
+      prev.map((r) => (r.id === result.id ? { ...r, status: 'processing' } : r))
+    );
+
+    try {
+      // STEP 1: Storage から署名付き URL を取得
+      const { data: signedUrlData, error: urlError } = await supabase.storage
+        .from('documents')
+        .createSignedUrl(result.storagePath, 300);
+
+      if (urlError || !signedUrlData?.signedUrl) {
+        throw new Error('ファイルURLの取得に失敗しました');
+      }
+
+      // STEP 2: OCR API 呼び出し
+      const ocrResponse = await fetch(`${API_BASE}/api/ocr/process`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          document_id: result.documentId,
+          file_url: signedUrlData.signedUrl,
+          file_path: result.storagePath,
+        }),
+      });
+
+      if (!ocrResponse.ok) {
+        const errData = await ocrResponse.json().catch(() => ({}));
+        throw new Error(errData.error || `OCR API エラー: ${ocrResponse.status}`);
+      }
+
+      const ocrData = await ocrResponse.json();
+      const ocrResult = ocrData.ocr_result;
+
+      // STEP 3: OCR 結果を documents テーブルに保存
+      await documentsApi.update(result.documentId, {
+        ocr_status: 'completed',
+        ocr_confidence: ocrResult.confidence_score,
+        supplier_name: ocrResult.extracted_supplier,
+        amount: ocrResult.extracted_amount,
+        tax_amount: ocrResult.extracted_tax_amount,
+        document_date: ocrResult.extracted_date || new Date().toISOString().split('T')[0],
+        status: 'ocr_completed',
+      } as any);
+
+      // STEP 4: 仕訳生成 API 呼び出し
+      const journalResponse = await fetch(`${API_BASE}/api/journal-entries/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          document_id: result.documentId,
+          client_id: currentWorkflow!.clientId,
+          ocr_result: ocrResult,
+          industry,
+        }),
+      });
+
+      if (!journalResponse.ok) {
+        const errData = await journalResponse.json().catch(() => ({}));
+        throw new Error(errData.error || `仕訳生成 API エラー: ${journalResponse.status}`);
+      }
+
+      const journalData = await journalResponse.json();
+      const journalEntry = journalData.journal_entry;
+
+      // STEP 5: 仕訳ヘッダーを journal_entries テーブルに保存
+      const { data: savedEntry, error: dbSaveError } = await supabase
+        .from('journal_entries')
+        .insert({
+          client_id: currentWorkflow!.clientId,
+          document_id: result.documentId,
+          entry_date: journalEntry.entry_date || ocrResult.extracted_date,
+          entry_type: 'normal',
+          description: journalEntry.notes,
+          status: 'draft',
+          notes: journalEntry.notes,
+          ai_generated: true,
+          ai_confidence: journalEntry.confidence,
+        })
+        .select()
+        .single();
+
+      if (dbSaveError) {
+        console.error('仕訳ヘッダー保存エラー:', dbSaveError);
+      }
+
+      // STEP 5b: 仕訳明細行を journal_entry_lines テーブルに保存
+      if (savedEntry && journalEntry.lines && journalEntry.lines.length > 0) {
+        const linesToInsert = journalEntry.lines.map((line: any, idx: number) => ({
+          journal_entry_id: savedEntry.id,
+          line_number: line.line_number ?? idx + 1,
+          debit_credit: line.debit_credit,
+          account_item_id: line.account_item_id,
+          amount: line.amount,
+          tax_category_id: line.tax_category_id || null,
+          tax_rate: line.tax_rate || null,
+          tax_amount: line.tax_amount || null,
+          description: line.description || null,
+        }));
+
+        const { error: linesError } = await supabase
+          .from('journal_entry_lines')
+          .insert(linesToInsert);
+
+        if (linesError) {
+          console.error('仕訳明細行保存エラー:', linesError);
+        }
+      }
+
+      // STEP 6: documents ステータスを更新
+      await documentsApi.update(result.documentId, {
+        status: 'ai_processing',
+      } as any);
+
+      // STEP 7: 進捗を更新（完了）
+      setOcrResults((prev) =>
+        prev.map((r) =>
+          r.id === result.id
+            ? {
+                ...r,
+                status: 'completed',
+                processedAt: new Date().toISOString(),
+                journalEntryId: savedEntry?.id,
+              }
+            : r
+        )
+      );
+    } catch (error: any) {
+      console.error(`OCR エラー (${result.fileName}):`, error);
+
+      await documentsApi.update(result.documentId, {
+        ocr_status: 'error',
+        status: 'uploaded',
+      } as any);
+
+      setOcrResults((prev) =>
+        prev.map((r) =>
+          r.id === result.id
+            ? { ...r, status: 'error', errorMessage: error.message }
+            : r
+        )
+      );
+    }
+  };
+
+  /** セマフォ付き並列実行 */
   const startOCRProcessing = async () => {
     setProcessing(true);
 
-    for (let i = 0; i < ocrResults.length; i++) {
-      const result = ocrResults[i];
-      if (result.status === 'completed') continue;
+    const pending = ocrResults.filter((r) => r.status !== 'completed');
+    let running = 0;
+    let index = 0;
 
-      // 処理中に更新
-      setOcrResults((prev) =>
-        prev.map((r) => (r.id === result.id ? { ...r, status: 'processing' } : r))
-      );
-
-      try {
-        // STEP 1: Storage から署名付き URL を取得
-        const { data: signedUrlData, error: urlError } = await supabase.storage
-          .from('documents')
-          .createSignedUrl(result.storagePath, 300);
-
-        if (urlError || !signedUrlData?.signedUrl) {
-          throw new Error('ファイルURLの取得に失敗しました');
+    await new Promise<void>((resolve) => {
+      const tryNext = () => {
+        // 全件完了チェック
+        if (index >= pending.length && running === 0) {
+          resolve();
+          return;
         }
 
-        // STEP 2: OCR API 呼び出し
-        const ocrResponse = await fetch(`${API_BASE}/api/ocr/process`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            document_id: result.documentId,
-            file_url: signedUrlData.signedUrl,
-            file_path: result.storagePath,
-          }),
-        });
+        // 並列数の空きがある限り次を投入
+        while (running < CONCURRENCY && index < pending.length) {
+          const item = pending[index++];
+          running++;
 
-        if (!ocrResponse.ok) {
-          const errData = await ocrResponse.json().catch(() => ({}));
-          throw new Error(errData.error || `OCR API エラー: ${ocrResponse.status}`);
+          processOneDocument(item).finally(() => {
+            running--;
+            tryNext();
+          });
         }
+      };
 
-        const ocrData = await ocrResponse.json();
-        const ocrResult = ocrData.ocr_result;
-
-        // STEP 3: OCR 結果を documents テーブルに保存
-        await documentsApi.update(result.documentId, {
-          ocr_status: 'completed',
-          ocr_confidence: ocrResult.confidence_score,
-          supplier_name: ocrResult.extracted_supplier,
-          amount: ocrResult.extracted_amount,
-          tax_amount: ocrResult.extracted_tax_amount,
-          document_date: ocrResult.extracted_date || new Date().toISOString().split('T')[0],
-          status: 'ocr_completed',
-        } as any);
-
-        // STEP 4: 仕訳生成 API 呼び出し
-        const journalResponse = await fetch(`${API_BASE}/api/journal-entries/generate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            document_id: result.documentId,
-            client_id: currentWorkflow!.clientId,
-            ocr_result: ocrResult,
-            industry,
-          }),
-        });
-
-        if (!journalResponse.ok) {
-          const errData = await journalResponse.json().catch(() => ({}));
-          throw new Error(errData.error || `仕訳生成 API エラー: ${journalResponse.status}`);
-        }
-
-        const journalData = await journalResponse.json();
-        const journalEntry = journalData.journal_entry;
-
-        // STEP 5: 仕訳ヘッダーを journal_entries テーブルに保存
-        const { data: savedEntry, error: dbSaveError } = await supabase
-          .from('journal_entries')
-          .insert({
-            client_id: currentWorkflow!.clientId,
-            document_id: result.documentId,
-            entry_date: journalEntry.entry_date || ocrResult.extracted_date,
-            entry_type: 'normal',
-            description: journalEntry.notes,
-            status: 'draft',
-            notes: journalEntry.notes,
-            ai_generated: true,
-            ai_confidence: journalEntry.confidence,
-          })
-          .select()
-          .single();
-
-        if (dbSaveError) {
-          console.error('仕訳ヘッダー保存エラー:', dbSaveError);
-        }
-
-        // STEP 5b: 仕訳明細行を journal_entry_lines テーブルに保存
-        if (savedEntry && journalEntry.lines && journalEntry.lines.length > 0) {
-          const linesToInsert = journalEntry.lines.map((line: any, idx: number) => ({
-            journal_entry_id: savedEntry.id,
-            line_number: line.line_number ?? idx + 1,
-            debit_credit: line.debit_credit,
-            account_item_id: line.account_item_id,
-            amount: line.amount,
-            tax_category_id: line.tax_category_id || null,
-            tax_rate: line.tax_rate || null,
-            tax_amount: line.tax_amount || null,
-            description: line.description || null,
-          }));
-
-          const { error: linesError } = await supabase
-            .from('journal_entry_lines')
-            .insert(linesToInsert);
-
-          if (linesError) {
-            console.error('仕訳明細行保存エラー:', linesError);
-          }
-        }
-
-        // STEP 6: documents ステータスを更新
-        await documentsApi.update(result.documentId, {
-          status: 'ai_processing',
-        } as any);
-
-        // STEP 7: 進捗を更新（完了）
-        setOcrResults((prev) =>
-          prev.map((r) =>
-            r.id === result.id
-              ? {
-                  ...r,
-                  status: 'completed',
-                  processedAt: new Date().toISOString(),
-                  journalEntryId: savedEntry?.id,
-                }
-              : r
-          )
-        );
-      } catch (error: any) {
-        console.error(`OCR エラー (${result.fileName}):`, error);
-
-        await documentsApi.update(result.documentId, {
-          ocr_status: 'error',
-          status: 'uploaded',
-        } as any);
-
-        setOcrResults((prev) =>
-          prev.map((r) =>
-            r.id === result.id
-              ? { ...r, status: 'error', errorMessage: error.message }
-              : r
-          )
-        );
-      }
-    }
+      tryNext();
+    });
 
     setProcessing(false);
   };
