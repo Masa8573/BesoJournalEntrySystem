@@ -308,7 +308,7 @@ export default function ExportPage() {
 
   return (
     <div className="flex flex-col h-screen">
-      {currentWorkflow && <WorkflowHeader nextLabel="集計・チェックへ" />}
+      {currentWorkflow && <WorkflowHeader nextLabel="集計チェックへ（完了）" />}
 
       <div className="flex-1 overflow-y-auto p-6">
         <div className="max-w-6xl mx-auto space-y-6">

@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   ZoomOut, ZoomIn, RotateCcw, ChevronLeft, ChevronRight,
   ChevronDown, Ban, AlertCircle, Loader, CheckCircle, Save, Search, X,
-  Lightbulb, History
+  HelpCircle, Lightbulb, History
 } from 'lucide-react';
 import { useWorkflow } from '@/client/context/WorkflowContext';
 import { supabase } from '@/client/lib/supabase';
@@ -73,7 +73,7 @@ interface DocumentWithEntry {
 
 interface TaxRateOption { id: string; rate: number; name: string; }
 interface RuleSuggestion { ruleName: string; accountItemId: string; accountItemName: string; taxCategoryId: string; taxCategoryName: string; }
-type ReviewFilter = '全て' | '未承認' | '要確認';
+type ReviewFilter = '全て' | '未承認' | '要確認' | '対象外';
 
 // ============================================
 // ReviewPage
@@ -110,6 +110,7 @@ export default function ReviewPage() {
     if (reviewFilter === '全て') return items;
     if (reviewFilter === '未承認') return items.filter(i => i.status !== 'approved' && !i.isExcluded);
     if (reviewFilter === '要確認') return items.filter(i => i.requiresReview);
+    if (reviewFilter === '対象外') return items.filter(i => i.isExcluded);
     return items;
   }, [items, reviewFilter]);
 
@@ -340,7 +341,20 @@ export default function ReviewPage() {
 
   const toggleExclude = () => setForm(p => ({ ...p, isExcluded: !p.isExcluded, isBusiness: p.isExcluded }));
 
-  const handleBeforeNext = async (): Promise<boolean> => { await saveCurrentItem(); updateWorkflowData({ reviewCompleted: true }); return true; };
+  const handleBeforeNext = async (): Promise<boolean> => {
+    await saveCurrentItem();
+    // 対象外証憑の確認ゲート
+    const excludedCount = items.filter(i => i.isExcluded).length;
+    if (excludedCount > 0) {
+      const ok = window.confirm(`対象外に設定された証憑が${excludedCount}件あります。\n\nこのまま仕訳出力に進みますか？\n「キャンセル」で戻って対象外証憑を確認できます。`);
+      if (!ok) {
+        setReviewFilter('対象外');
+        return false;
+      }
+    }
+    updateWorkflowData({ reviewCompleted: true });
+    return true;
+  };
 
   // ============================================
   // ガード
@@ -360,10 +374,10 @@ export default function ReviewPage() {
         <div className="flex items-center gap-4">
           {/* フィルタ */}
           <div className="flex rounded-md border border-gray-300 overflow-hidden">
-            {(['全て', '未承認', '要確認'] as ReviewFilter[]).map(f => (
+            {(['全て', '未承認', '要確認', '対象外'] as ReviewFilter[]).map(f => (
               <button key={f} onClick={() => { setReviewFilter(f); }}
                 className={`px-2.5 py-1 text-xs font-medium transition-colors ${reviewFilter === f ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
-                {f}{f === '未承認' ? `(${statusCounts.draft})` : f === '要確認' ? `(${statusCounts.review})` : ''}
+                {f}{f === '未承認' ? `(${statusCounts.draft})` : f === '要確認' ? `(${statusCounts.review})` : f === '対象外' ? `(${statusCounts.excluded})` : ''}
               </button>
             ))}
           </div>

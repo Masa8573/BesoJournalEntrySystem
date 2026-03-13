@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { workflowsApi, getStepPath } from '@/client/lib/workflowStorage';
+import { workflowsApi, getStepPath, TOTAL_STEPS } from '@/client/lib/workflowStorage';
 import type { WorkflowState } from '@/client/lib/workflowStorage';
 
 // ============================================
@@ -8,246 +8,152 @@ import type { WorkflowState } from '@/client/lib/workflowStorage';
 // ============================================
 interface WorkflowContextType {
   currentWorkflow: WorkflowState | null;
-
   startWorkflow: (clientId: string, clientName: string) => Promise<void>;
   resumeWorkflow: (workflowId: string) => Promise<void>;
   updateWorkflowData: (data: Partial<WorkflowState['data']>) => Promise<void>;
-
   goToNextStep: () => Promise<void>;
   goToPreviousStep: () => Promise<void>;
   goToStep: (step: number) => Promise<void>;
-
   markCurrentStepComplete: () => Promise<void>;
   saveAndExit: () => void;
   completeWorkflow: () => Promise<void>;
-
   isStepComplete: (step: number) => boolean;
   canGoToNextStep: () => boolean;
   canGoToPreviousStep: () => boolean;
 }
 
-// ============================================
-// Context作成
-// ============================================
 const WorkflowContext = createContext<WorkflowContextType | undefined>(undefined);
 
-// ============================================
-// Provider
-// ============================================
-interface WorkflowProviderProps {
-  children: React.ReactNode;
-}
+interface WorkflowProviderProps { children: React.ReactNode; }
 
 export function WorkflowProvider({ children }: WorkflowProviderProps) {
   const navigate = useNavigate();
-
-  // パスパラメータから client_id を取得
-  // /clients/:id/* のどのページにいても id を取得できる
   const params = useParams<{ id?: string }>();
   const clientIdFromPath = params.id;
-
   const [currentWorkflow, setCurrentWorkflow] = useState<WorkflowState | null>(null);
 
-  // ============================================
-  // 初期化：URLのclient_idからワークフローを復元
-  // ============================================
+  // 初期化
   useEffect(() => {
     if (!clientIdFromPath) return;
-    // 既に同じクライアントのワークフローがロード済みならスキップ
     if (currentWorkflow?.clientId === clientIdFromPath) return;
-
     workflowsApi.getByClient(clientIdFromPath).then((workflow) => {
-      if (workflow) {
-        setCurrentWorkflow(workflow);
-      }
+      if (workflow) setCurrentWorkflow(workflow);
     });
-  }, [clientIdFromPath]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [clientIdFromPath]);
 
-  // ============================================
-  // 新規ワークフロー開始
-  // ============================================
+  // 新規開始
   const startWorkflow = useCallback(async (clientId: string, clientName: string) => {
     const workflow = await workflowsApi.create(clientId, clientName);
     if (!workflow) return;
-
     setCurrentWorkflow(workflow);
     navigate(`/clients/${clientId}/upload`);
   }, [navigate]);
 
-  // ============================================
-  // 既存ワークフロー再開
-  // ============================================
+  // 再開
   const resumeWorkflow = useCallback(async (workflowId: string) => {
     const workflow = await workflowsApi.getById(workflowId);
     if (!workflow) return;
-
     setCurrentWorkflow(workflow);
-
-    const path = getStepPath(workflow.currentStep, workflow.clientId);
-    navigate(path);
+    navigate(getStepPath(workflow.currentStep, workflow.clientId));
   }, [navigate]);
 
-  // ============================================
-  // ワークフローデータ更新
-  // ============================================
+  // データ更新
   const updateWorkflowData = useCallback(async (data: Partial<WorkflowState['data']>) => {
     if (!currentWorkflow) return;
-
     const mergedData = { ...currentWorkflow.data, ...data };
     const updated = await workflowsApi.update(currentWorkflow.id, { data: mergedData });
-
-    if (updated) {
-      setCurrentWorkflow({ ...updated, clientName: currentWorkflow.clientName });
-    }
+    if (updated) setCurrentWorkflow({ ...updated, clientName: currentWorkflow.clientName });
   }, [currentWorkflow]);
 
-  // ============================================
-  // 次のステップへ
-  // ============================================
+  // 次のステップ（5ステップ上限）
   const goToNextStep = useCallback(async () => {
     if (!currentWorkflow) return;
-    if (currentWorkflow.currentStep >= 7) return;
+    if (currentWorkflow.currentStep >= TOTAL_STEPS) return;
 
     const nextStep = currentWorkflow.currentStep + 1;
     const completedSteps = currentWorkflow.completedSteps.includes(currentWorkflow.currentStep)
       ? currentWorkflow.completedSteps
       : [...currentWorkflow.completedSteps, currentWorkflow.currentStep].sort((a, b) => a - b);
 
-    const updated = await workflowsApi.update(currentWorkflow.id, {
-      currentStep: nextStep,
-      completedSteps,
-    });
-
+    const updated = await workflowsApi.update(currentWorkflow.id, { currentStep: nextStep, completedSteps });
     if (updated) {
       setCurrentWorkflow({ ...updated, clientName: currentWorkflow.clientName });
       navigate(getStepPath(nextStep, updated.clientId));
     }
   }, [currentWorkflow, navigate]);
 
-  // ============================================
-  // 前のステップへ
-  // ============================================
+  // 前のステップ
   const goToPreviousStep = useCallback(async () => {
     if (!currentWorkflow) return;
     if (currentWorkflow.currentStep <= 1) return;
-
     const prevStep = currentWorkflow.currentStep - 1;
     const updated = await workflowsApi.update(currentWorkflow.id, { currentStep: prevStep });
-
     if (updated) {
       setCurrentWorkflow({ ...updated, clientName: currentWorkflow.clientName });
       navigate(getStepPath(prevStep, updated.clientId));
     }
   }, [currentWorkflow, navigate]);
 
-  // ============================================
-  // 特定ステップへジャンプ
-  // ============================================
+  // 特定ステップへ（5ステップ上限）
   const goToStep = useCallback(async (step: number) => {
     if (!currentWorkflow) return;
-    if (step < 1 || step > 7) return;
-
+    if (step < 1 || step > TOTAL_STEPS) return;
     const updated = await workflowsApi.update(currentWorkflow.id, { currentStep: step });
-
     if (updated) {
       setCurrentWorkflow({ ...updated, clientName: currentWorkflow.clientName });
       navigate(getStepPath(step, updated.clientId));
     }
   }, [currentWorkflow, navigate]);
 
-  // ============================================
-  // 現在のステップを完了としてマーク
-  // ============================================
+  // 現在ステップ完了マーク
   const markCurrentStepComplete = useCallback(async () => {
     if (!currentWorkflow) return;
-
     const step = currentWorkflow.currentStep;
     if (currentWorkflow.completedSteps.includes(step)) return;
-
     const completedSteps = [...currentWorkflow.completedSteps, step].sort((a, b) => a - b);
     const updated = await workflowsApi.update(currentWorkflow.id, { completedSteps });
-
-    if (updated) {
-      setCurrentWorkflow({ ...updated, clientName: currentWorkflow.clientName });
-    }
+    if (updated) setCurrentWorkflow({ ...updated, clientName: currentWorkflow.clientName });
   }, [currentWorkflow]);
 
-  // ============================================
-  // 中断して保存（顧客一覧へ戻る）
-  // ============================================
-  const saveAndExit = useCallback(() => {
-    // Supabaseには常に最新状態が保存済みなので追加保存不要
-    navigate('/clients');
-  }, [navigate]);
+  // 中断
+  const saveAndExit = useCallback(() => { navigate('/clients'); }, [navigate]);
 
-  // ============================================
-  // ワークフロー完了
-  // ============================================
+  // ワークフロー完了 → 集計チェックへ
   const completeWorkflow = useCallback(async () => {
     if (!currentWorkflow) return;
-
     await workflowsApi.complete(currentWorkflow.id);
+    const clientId = currentWorkflow.clientId;
     setCurrentWorkflow(null);
-    navigate('/clients');
+    navigate(`/clients/${clientId}/summary`);
   }, [currentWorkflow, navigate]);
 
-  // ============================================
-  // ステップ完了チェック
-  // ============================================
+  // チェック
   const isStepComplete = useCallback((step: number): boolean => {
     if (!currentWorkflow) return false;
     return currentWorkflow.completedSteps.includes(step);
   }, [currentWorkflow]);
 
-  // ============================================
-  // 次へボタン有効チェック
-  // ============================================
   const canGoToNextStep = useCallback((): boolean => {
     if (!currentWorkflow) return false;
-    return currentWorkflow.currentStep < 7;
+    return currentWorkflow.currentStep < TOTAL_STEPS;
   }, [currentWorkflow]);
 
-  // ============================================
-  // 前へボタン有効チェック
-  // ============================================
   const canGoToPreviousStep = useCallback((): boolean => {
     if (!currentWorkflow) return false;
     return currentWorkflow.currentStep > 1;
   }, [currentWorkflow]);
 
-  // ============================================
-  // Context Value
-  // ============================================
   const value: WorkflowContextType = {
-    currentWorkflow,
-    startWorkflow,
-    resumeWorkflow,
-    updateWorkflowData,
-    goToNextStep,
-    goToPreviousStep,
-    goToStep,
-    markCurrentStepComplete,
-    saveAndExit,
-    completeWorkflow,
-    isStepComplete,
-    canGoToNextStep,
-    canGoToPreviousStep,
+    currentWorkflow, startWorkflow, resumeWorkflow, updateWorkflowData,
+    goToNextStep, goToPreviousStep, goToStep, markCurrentStepComplete,
+    saveAndExit, completeWorkflow, isStepComplete, canGoToNextStep, canGoToPreviousStep,
   };
 
-  return (
-    <WorkflowContext.Provider value={value}>
-      {children}
-    </WorkflowContext.Provider>
-  );
+  return <WorkflowContext.Provider value={value}>{children}</WorkflowContext.Provider>;
 }
 
-// ============================================
-// Custom Hook
-// ============================================
 export function useWorkflow(): WorkflowContextType {
   const context = useContext(WorkflowContext);
-  if (context === undefined) {
-    throw new Error('useWorkflow must be used within a WorkflowProvider');
-  }
+  if (context === undefined) throw new Error('useWorkflow must be used within a WorkflowProvider');
   return context;
 }
