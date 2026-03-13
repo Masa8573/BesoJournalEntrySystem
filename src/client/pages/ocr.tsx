@@ -104,7 +104,6 @@ export default function OCRPage() {
       // --- STEP 1: Storage署名付きURL ---
       currentStep = 'storage_url';
       let storagePath = result.storagePath;
-      if (storagePath.startsWith('documents/')) storagePath = storagePath.substring('documents/'.length);
 
       const { data: signedUrlData, error: urlError } = await supabase.storage
         .from('documents').createSignedUrl(storagePath, 300);

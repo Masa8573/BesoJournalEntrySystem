@@ -149,8 +149,6 @@ export default function ReviewPage() {
 
     const merged: DocumentWithEntry[] = await Promise.all(docs.map(async (doc: any) => {
       let path = doc.storage_path || doc.file_path || '';
-      // storage_path が "documents/..." で始まる場合、バケット名と重複するので除去
-      if (path.startsWith('documents/')) path = path.substring('documents/'.length);
       let imageUrl: string | null = null;
       if (path) { const { data: u } = await supabase.storage.from('documents').createSignedUrl(path, 3600); imageUrl = u?.signedUrl || null; }
       const entry = entries?.find((e: any) => e.document_id === doc.id);
