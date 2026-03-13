@@ -21,7 +21,6 @@ interface EntryRow {
   ai_generated?: boolean;
   requires_review?: boolean;
   lines: LineRow[];
-  // 表示用フラット
   accountItemName?: string;
   taxCategoryName?: string;
   amount?: number;
@@ -43,6 +42,7 @@ export default function AiCheckPage() {
   const [accountItems, setAccountItems] = useState<AccountItem[]>([]);
   const [taxCategories, setTaxCategories] = useState<TaxCategory[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<{
     account_item_id?: string;
@@ -51,9 +51,7 @@ export default function AiCheckPage() {
     notes?: string;
   }>({});
 
-  useEffect(() => {
-    loadData();
-  }, [currentWorkflow]);
+  useEffect(() => { loadData(); }, [currentWorkflow]);
 
   // ============================================
   // データ読み込み
@@ -61,14 +59,23 @@ export default function AiCheckPage() {
   const loadData = async () => {
     if (!currentWorkflow) return;
     setLoading(true);
+    setLoadError(null);
 
     const clientId = currentWorkflow.clientId;
 
-    const { data: docs } = await supabase
+    // 1. documents取得
+    const { data: docs, error: docsError } = await supabase
       .from('documents')
       .select('id')
       .eq('workflow_id', currentWorkflow.id)
       .eq('client_id', clientId);
+
+    if (docsError) {
+      console.error('ドキュメント取得エラー:', docsError);
+      setLoadError(`ドキュメント取得失敗: ${docsError.message} (code: ${docsError.code})`);
+      setLoading(false);
+      return;
+    }
 
     const docIds = docs?.map((d: any) => d.id) || [];
 
@@ -79,16 +86,24 @@ export default function AiCheckPage() {
     }
 
     // -------------------------------------------------------
-    // 修正: account_items/tax_categories へのネストJOINを排除
-    // → journal_entry_lines の ID だけ取得し、
-    //   マスタデータはフロントでマッピングする方式に変更
-    // これにより PostgREST の "ambiguous relationship" 400 エラーを回避
+    // 2. journal_entries + journal_entry_lines 取得
+    //
+    // 【重要】journal_entries と journal_entry_lines の両方が
+    // suppliers テーブルへの FK を持っているため、PostgREST は
+    // 親子リレーションを自動解決できず 400 エラーを返す。
+    //
+    // 解決策: journal_entry_lines の JOIN に FK制約名ヒントを指定
+    //   journal_entry_lines!journal_entry_lines_journal_entry_id_fkey
+    //
+    // これにより「journal_entry_id カラム経由の FK」であることを
+    // PostgREST に明示的に伝える。
     // -------------------------------------------------------
     const { data: entriesData, error } = await supabase
       .from('journal_entries')
       .select(`
-        id, client_id, document_id, entry_date, description, status, notes, ai_confidence, ai_generated, requires_review,
-        journal_entry_lines (
+        id, client_id, document_id, entry_date, description, status, notes,
+        ai_confidence, ai_generated, requires_review,
+        journal_entry_lines!journal_entry_lines_journal_entry_id_fkey (
           id, line_number, debit_credit, account_item_id, tax_category_id, amount, description
         )
       `)
@@ -98,10 +113,18 @@ export default function AiCheckPage() {
       .order('entry_date', { ascending: true });
 
     if (error) {
-      console.error('仕訳取得エラー:', error);
+      console.error('仕訳取得エラー:', {
+        message: error.message,
+        code: error.code,
+        details: error.details,
+        hint: error.hint,
+      });
+      setLoadError(`仕訳取得失敗: ${error.message} (code: ${error.code}, hint: ${error.hint || 'なし'})`);
+      setLoading(false);
+      return;
     }
 
-    // マスタ取得
+    // 3. マスタ取得
     const [accountsRes, taxRes] = await Promise.all([
       accountItemsApi.getAll(),
       taxCategoriesApi.getAll(),
@@ -111,7 +134,6 @@ export default function AiCheckPage() {
     setAccountItems(accountItemsList);
     setTaxCategories(taxCategoriesList);
 
-    // マスタをMapに変換（高速ルックアップ用）
     const accountMap = new Map(accountItemsList.map(a => [a.id, a.name]));
     const taxCatMap = new Map(taxCategoriesList.map(t => [t.id, t.display_name || t.name]));
 
@@ -149,7 +171,6 @@ export default function AiCheckPage() {
 
   const handleSave = async (entry: EntryRow) => {
     await supabase.from('journal_entries').update({ notes: editForm.notes }).eq('id', entry.id);
-
     const debitLine = entry.lines.find(l => l.debit_credit === 'debit') || entry.lines[0];
     if (debitLine) {
       await supabase.from('journal_entry_lines').update({
@@ -158,7 +179,6 @@ export default function AiCheckPage() {
         amount: editForm.amount,
       }).eq('id', debitLine.id);
     }
-
     await loadData();
     setEditingId(null);
     setEditForm({});
@@ -200,6 +220,9 @@ export default function AiCheckPage() {
     return `¥${Number(amount).toLocaleString()}`;
   };
 
+  // ============================================
+  // ガード画面
+  // ============================================
   if (!currentWorkflow) {
     return (
       <div className="flex flex-col items-center justify-center h-full">
@@ -244,6 +267,20 @@ export default function AiCheckPage() {
             )}
           </div>
 
+          {/* エラー表示（診断情報付き） */}
+          {loadError && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+              <div className="flex items-start gap-3">
+                <AlertCircle size={20} className="text-red-500 flex-shrink-0 mt-0.5" />
+                <div>
+                  <h3 className="text-sm font-medium text-red-900">データ読み込みエラー</h3>
+                  <p className="text-sm text-red-700 mt-1 font-mono break-all">{loadError}</p>
+                  <button onClick={loadData} className="mt-3 px-3 py-1.5 text-sm bg-red-600 text-white rounded-md hover:bg-red-700">再読み込み</button>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="card">
               <div className="flex items-center gap-2 mb-2"><div className="w-3 h-3 bg-blue-500 rounded-full"></div><h3 className="text-sm font-medium text-gray-600">確認待ち</h3></div>
@@ -261,13 +298,13 @@ export default function AiCheckPage() {
 
           <div className="card">
             <h2 className="text-lg font-semibold text-gray-900 mb-4">仕訳一覧</h2>
-            {entries.length === 0 ? (
+            {entries.length === 0 && !loadError ? (
               <div className="text-center py-12">
                 <CheckCircle size={64} className="mx-auto text-green-300 mb-4" />
                 <p className="text-lg font-medium text-gray-600 mb-2">確認待ちの仕訳はありません</p>
                 <p className="text-sm text-gray-500">すべて承認済みです。「→」キーまたは上部の「仕訳確認へ」で次に進んでください。</p>
               </div>
-            ) : (
+            ) : entries.length > 0 ? (
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead className="bg-gray-50 border-b border-gray-200">
@@ -334,7 +371,7 @@ export default function AiCheckPage() {
                   </tbody>
                 </table>
               </div>
-            )}
+            ) : null}
           </div>
 
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
