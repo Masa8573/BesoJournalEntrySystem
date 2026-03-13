@@ -157,6 +157,7 @@ export default function ExportPage() {
   const [exportHistory, setExportHistory] = useState<ExportRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [draftCount, setDraftCount] = useState(0);
 
   // ============================================
   // データ取得
@@ -178,33 +179,72 @@ export default function ExportPage() {
     const taxCatMap = new Map(taxCats.map(t => [t.id, t.display_name || t.name]));
 
     // -------------------------------------------------------
-    // 修正: ネストJOINを排除してフラットクエリ + フロントマッピング
-    // account_items が tax_categories を参照しているため、
-    // PostgRESTが曖昧性エラーを出す問題を回避
+    // 2段階クエリ: journal_entries → journal_entry_lines を別クエリ
+    // PostgREST の ambiguous relationship エラーを完全回避
     // -------------------------------------------------------
-    const { data, error } = await supabase
+
+    // STEP 1: journal_entries（リレーションなし）
+    const { data: entriesData, error: entriesError } = await supabase
       .from('journal_entries')
-      .select(`
-        id, entry_date, created_at, description, status, is_excluded, supplier_id,
-        lines:journal_entry_lines(
-          id, line_number, debit_credit, account_item_id, tax_category_id, amount, tax_rate, tax_amount, description
-        )
-      `)
+      .select('id, entry_date, created_at, description, status, is_excluded, supplier_id')
       .eq('client_id', clientId)
       .in('status', ['approved', 'posted'])
       .order('entry_date', { ascending: false });
 
-    if (!error && data) {
-      const mapped = (data as unknown as EntryWithJoin[]).map(entry => {
-        const debit = entry.lines?.find(l => l.debit_credit === 'debit');
-        return {
-          ...entry,
-          _debitAccountName: debit?.account_item_id ? accountMap.get(debit.account_item_id) || '' : '',
-          _debitTaxCatName: debit?.tax_category_id ? taxCatMap.get(debit.tax_category_id) || '' : '',
-        };
-      });
-      setEntries(mapped);
+    if (entriesError) {
+      console.error('[仕訳出力] journal_entries取得エラー:', entriesError);
+      setLoading(false);
+      return;
     }
+
+    if (!entriesData || entriesData.length === 0) {
+      setEntries([]);
+      setLoading(false);
+      return;
+    }
+
+    // STEP 2: journal_entry_lines（リレーションなし）
+    const entryIds = entriesData.map((e: any) => e.id);
+    const { data: linesData, error: linesError } = await supabase
+      .from('journal_entry_lines')
+      .select('id, journal_entry_id, line_number, debit_credit, account_item_id, tax_category_id, amount, tax_rate, tax_amount, description')
+      .in('journal_entry_id', entryIds)
+      .order('line_number', { ascending: true });
+
+    if (linesError) {
+      console.error('[仕訳出力] journal_entry_lines取得エラー:', linesError);
+    }
+
+    // STEP 3: lines を journal_entry_id でグループ化
+    const linesMap = new Map<string, ExportLine[]>();
+    (linesData || []).forEach((line: any) => {
+      const existing = linesMap.get(line.journal_entry_id) || [];
+      existing.push(line);
+      linesMap.set(line.journal_entry_id, existing);
+    });
+
+    // STEP 4: マージ + フロントマッピング
+    const mapped: EntryWithJoin[] = entriesData.map((entry: any) => {
+      const lines = linesMap.get(entry.id) || [];
+      const debit = lines.find(l => l.debit_credit === 'debit');
+      return {
+        ...entry,
+        lines,
+        _debitAccountName: debit?.account_item_id ? accountMap.get(debit.account_item_id) || '' : '',
+        _debitTaxCatName: debit?.tax_category_id ? taxCatMap.get(debit.tax_category_id) || '' : '',
+      };
+    });
+
+    setEntries(mapped);
+
+    // 未承認件数を取得（警告表示用）
+    const { count } = await supabase
+      .from('journal_entries')
+      .select('id', { count: 'exact', head: true })
+      .eq('client_id', clientId)
+      .in('status', ['draft', 'pending']);
+    setDraftCount(count || 0);
+
     setLoading(false);
   };
 
@@ -244,6 +284,10 @@ export default function ExportPage() {
   }, [filteredByPeriod]);
 
   const handleCsvDownload = () => {
+    if (draftCount > 0) {
+      const ok = window.confirm(`未承認の仕訳が${draftCount}件あり、出力対象から除外されています。\nこのままCSVをダウンロードしますか？`);
+      if (!ok) return;
+    }
     const csv = buildFreeeCsv(filteredEntries);
     const name = currentWorkflow?.clientName ?? clientId;
     const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
@@ -287,6 +331,16 @@ export default function ExportPage() {
 
           {activeTab === '出力' && (
             <>
+              {/* 未承認警告バナー */}
+              {draftCount > 0 && (
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex items-center gap-3">
+                  <AlertCircle size={20} className="text-yellow-600 flex-shrink-0" />
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-yellow-900">未承認の仕訳が {draftCount} 件あります</p>
+                    <p className="text-xs text-yellow-700 mt-0.5">未承認の仕訳はCSV出力対象に含まれません。仕訳確認ページで承認してください。</p>
+                  </div>
+                </div>
+              )}
               {/* 期間フィルター + 日付基準切り替え */}
               <div className="card">
                 <div className="flex items-center justify-between mb-3">
