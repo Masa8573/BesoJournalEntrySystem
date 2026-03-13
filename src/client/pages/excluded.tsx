@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { FileX, AlertCircle, Loader, RotateCcw, FileText, FileSpreadsheet, Package, ClipboardList, HelpCircle } from 'lucide-react';
 import { useWorkflow } from '@/client/context/WorkflowContext';
 import { supabase } from '@/client/lib/supabase';
-import WorkflowHeader from '@/client/components/workflow/WorkflowHeader';
 
 // ============================================
 // 型定義
@@ -217,8 +216,6 @@ export default function ExcludedPage() {
 
   return (
     <div className="flex flex-col h-screen">
-      {/* ワークフローヘッダー（最終ステップ：完了ボタン付き） */}
-      <WorkflowHeader showComplete={true} />
 
       {/* メインコンテンツ */}
       <div className="flex-1 overflow-y-auto p-6">

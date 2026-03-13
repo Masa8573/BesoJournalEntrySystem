@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   ZoomOut, ZoomIn, RotateCcw, ChevronLeft, ChevronRight,
   ChevronDown, Ban, AlertCircle, Loader, CheckCircle, Save, Search, X,
-  HelpCircle, Lightbulb, History
+  Lightbulb, History
 } from 'lucide-react';
 import { useWorkflow } from '@/client/context/WorkflowContext';
 import { supabase } from '@/client/lib/supabase';

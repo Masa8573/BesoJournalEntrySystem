@@ -51,8 +51,6 @@ function Sidebar() {
   const reviewPath = workflowPath('review');
   const reviewExcludedPath = workflowPath('review-excluded');
 
-  const summaryActive = isActive(summaryPath);
-  const excludedHistoryActive = isActive(excludedHistoryPath);
   const reviewActive = isActive(reviewPath);
   const reviewExcludedActive = isActive(reviewExcludedPath);
   // 仕訳確認にいるとき、対象外証憑リンクも青くする
