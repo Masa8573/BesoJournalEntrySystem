@@ -68,7 +68,7 @@ interface DocumentWithEntry {
   entryId: string | null; entryDate: string; description: string; status: string;
   isExcluded: boolean; isBusiness: boolean; aiConfidence: number | null; requiresReview: boolean;
   lineId: string | null; accountItemId: string; taxCategoryId: string; lineAmount: number; taxRate: number | null;
-  supplierId: string | null; itemId: string | null;
+  supplierId: string | null; itemId: string | null; tagId: string | null;
 }
 
 interface TaxRateOption { id: string; rate: number; name: string; }
@@ -93,7 +93,9 @@ export default function ReviewPage() {
   const [zoom, setZoom] = useState(100);
   const [form, setForm] = useState<Partial<DocumentWithEntry>>({});
   const [addRule, setAddRule] = useState(false);
+  const [ruleScope, setRuleScope] = useState<'shared' | 'industry' | 'client'>('shared');
   const [ruleIndustryId, setRuleIndustryId] = useState('');
+  const [ruleType, setRuleType] = useState<'支出' | '収入'>('支出');
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>('全て');
   const [ruleSuggestion, setRuleSuggestion] = useState<RuleSuggestion | null>(null);
   const [showApprovalHistory, setShowApprovalHistory] = useState(false);
@@ -163,7 +165,7 @@ export default function ReviewPage() {
         requiresReview: false,
         lineId: debitLine?.id || null, accountItemId: debitLine?.account_item_id || '', taxCategoryId: debitLine?.tax_category_id || '',
         lineAmount: debitLine?.amount || doc.amount || 0, taxRate: debitLine?.tax_rate || null,
-        supplierId: debitLine?.supplier_id || null, itemId: debitLine?.item_id || null,
+        supplierId: debitLine?.supplier_id || null, itemId: debitLine?.item_id || null, tagId: null,
       } as DocumentWithEntry;
     }));
 
@@ -306,13 +308,33 @@ export default function ReviewPage() {
     }
 
     if (addRule && form.accountItemId) {
-      await supabase.from('processing_rules').insert([{
-        rule_name: `${form.description || item.supplierName || '不明'} → 自動仕訳`, priority: 100, rule_type: '支出',
-        scope: ruleIndustryId ? 'industry' : 'shared', industry_id: ruleIndustryId || null,
-        conditions: { supplier_pattern: item.supplierName || null },
-        actions: { account_item_id: form.accountItemId, tax_category_id: form.taxCategoryId, description_template: form.description },
-        auto_apply: true, require_confirmation: false, is_active: true,
-      }]);
+      const ruleData: Record<string, any> = {
+        rule_name: `${form.description || item.supplierName || '不明'} → 自動仕訳`,
+        priority: 100,
+        rule_type: ruleType,
+        scope: ruleScope,
+        industry_id: ruleScope === 'industry' ? ruleIndustryId || null : null,
+        client_id: ruleScope === 'client' ? currentWorkflow!.clientId : null,
+        conditions: {
+          supplier_pattern: item.supplierName || null,
+          transaction_pattern: form.description || null,
+        },
+        actions: {
+          account_item_id: form.accountItemId,
+          tax_category_id: form.taxCategoryId || null,
+          description_template: form.description || null,
+        },
+        auto_apply: true,
+        require_confirmation: false,
+        is_active: true,
+      };
+      const { error } = await supabase.from('processing_rules').insert([ruleData]);
+      if (error) {
+        console.error('ルール追加エラー:', error);
+        alert('ルール追加に失敗しました: ' + error.message);
+      } else {
+        setAddRule(false);
+      }
     }
 
     setItems(prev => prev.map((it, i) => i === currentIndex ? { ...it, ...form, entryId } as DocumentWithEntry : it));
@@ -541,7 +563,7 @@ export default function ReviewPage() {
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-medium">取引先タグ</label>
-                <SearchableSelect options={supplierTagOptions} value="" onChange={() => {}} placeholder="-- タグを検索 --" />
+                <SearchableSelect options={supplierTagOptions} value={form.tagId || ''} onChange={v => setForm(p => ({ ...p, tagId: v }))} placeholder="-- タグを検索 --" />
               </div>
               <div className="space-y-1 col-span-2">
                 <label className="text-xs font-medium">摘要</label>
@@ -565,8 +587,67 @@ export default function ReviewPage() {
                   <input type="checkbox" checked={addRule} onChange={e => setAddRule(e.target.checked)} className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
                   <span className="text-sm text-gray-700">ルール追加</span>
                 </label>
-                {addRule && <select value={ruleIndustryId} onChange={e => setRuleIndustryId(e.target.value)} className="border border-gray-300 rounded-md p-1.5 text-sm bg-white"><option value="">共通ルール</option>{industries.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}</select>}
               </div>
+              {addRule && (
+                <div className="space-y-2 pl-6 border-l-2 border-blue-200">
+                  {/* 収支区分 */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-500 w-16">収支区分:</span>
+                    <div className="flex rounded-md border border-gray-300 overflow-hidden">
+                      {(['支出', '収入'] as const).map(t => (
+                        <button key={t} type="button" onClick={() => setRuleType(t)}
+                          className={`px-3 py-1 text-xs font-medium ${ruleType === t ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
+                          {t}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {/* スコープ選択 */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-500 w-16">適用範囲:</span>
+                    <div className="flex rounded-md border border-gray-300 overflow-hidden">
+                      {([
+                        { value: 'shared' as const, label: '共通' },
+                        { value: 'industry' as const, label: '業種別' },
+                        { value: 'client' as const, label: 'この顧客' },
+                      ]).map(s => (
+                        <button key={s.value} type="button" onClick={() => setRuleScope(s.value)}
+                          className={`px-3 py-1 text-xs font-medium ${ruleScope === s.value ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
+                          {s.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {/* 業種選択（業種別の場合のみ） */}
+                  {ruleScope === 'industry' && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500 w-16">業種:</span>
+                      <select value={ruleIndustryId} onChange={e => setRuleIndustryId(e.target.value)}
+                        className="flex-1 border border-gray-300 rounded-md p-1.5 text-xs bg-white">
+                        <option value="">-- 業種を選択 --</option>
+                        {industries.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+                      </select>
+                    </div>
+                  )}
+                  {/* 顧客名表示（この顧客の場合） */}
+                  {ruleScope === 'client' && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500 w-16">顧客:</span>
+                      <span className="text-xs font-medium text-blue-700">{currentWorkflow?.clientName || '-'}</span>
+                    </div>
+                  )}
+                  {/* ルール内容プレビュー */}
+                  <div className="bg-white border border-gray-200 rounded-md p-2 text-xs text-gray-600">
+                    <p className="font-medium text-gray-700 mb-1">保存時に追加されるルール:</p>
+                    <p>取引先「{currentItem.supplierName || '-'}」→ 勘定科目「{accountItems.find(a => a.id === form.accountItemId)?.name || '-'}」/ 税区分「{taxCategories.find(t => t.id === form.taxCategoryId)?.display_name || taxCategories.find(t => t.id === form.taxCategoryId)?.name || '-'}」</p>
+                    <p className="text-gray-400 mt-0.5">
+                      {ruleScope === 'shared' && '全顧客に適用されます'}
+                      {ruleScope === 'industry' && `業種「${industries.find(i => i.id === ruleIndustryId)?.name || '未選択'}」の顧客に適用されます`}
+                      {ruleScope === 'client' && `「${currentWorkflow?.clientName}」のみに適用されます`}
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
 
             {currentItem.entryId && <div className="text-xs text-gray-400 text-right">仕訳ID: {currentItem.entryId.slice(0, 8)}...</div>}
