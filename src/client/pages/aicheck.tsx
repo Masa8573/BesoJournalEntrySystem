@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { CheckCircle, XCircle, Edit2, Save, X, AlertCircle, Loader, ShieldCheck, HelpCircle, Trash2, Square, CheckSquare } from 'lucide-react';
+import { CheckCircle, XCircle, Edit2, Save, X, AlertCircle, Loader, HelpCircle, Trash2, Square, CheckSquare } from 'lucide-react';
 import { supabase } from '@/client/lib/supabase';
 import { accountItemsApi, taxCategoriesApi } from '@/client/lib/api';
 import { useWorkflow } from '@/client/context/WorkflowContext';
