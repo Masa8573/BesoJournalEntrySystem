@@ -1,13 +1,116 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   ZoomOut, ZoomIn, RotateCcw, ChevronLeft, ChevronRight,
-  ChevronDown, Ban, AlertCircle, Loader, CheckCircle, Save
+  ChevronDown, Ban, AlertCircle, Loader, CheckCircle, Save, Search, X
 } from 'lucide-react';
 import { useWorkflow } from '@/client/context/WorkflowContext';
 import { supabase } from '@/client/lib/supabase';
 import { accountItemsApi, taxCategoriesApi } from '@/client/lib/api';
 import WorkflowHeader from '@/client/components/workflow/WorkflowHeader';
 import type { AccountItem, TaxCategory, Tag } from '@/types';
+
+// ============================================
+// SearchableSelect（インラインコンポーネント）
+// ============================================
+interface SearchableSelectOption {
+  value: string;
+  label: string;
+  group?: string;
+}
+
+function SearchableSelect({
+  options, value, onChange, placeholder = '-- 選択 --', disabled = false, grouped = false,
+}: {
+  options: SearchableSelectOption[];
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  disabled?: boolean;
+  grouped?: boolean;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const selectedLabel = options.find(o => o.value === value)?.label || '';
+
+  const filteredOptions = useMemo(() => {
+    if (!search.trim()) return options;
+    const q = search.toLowerCase();
+    return options.filter(o => o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q) || (o.group && o.group.toLowerCase().includes(q)));
+  }, [options, search]);
+
+  const groupedOptions = useMemo(() => {
+    if (!grouped) return null;
+    const groups: Record<string, SearchableSelectOption[]> = {};
+    filteredOptions.forEach(o => { const g = o.group || 'その他'; if (!groups[g]) groups[g] = []; groups[g].push(o); });
+    return groups;
+  }, [filteredOptions, grouped]);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => { if (containerRef.current && !containerRef.current.contains(e.target as Node)) { setIsOpen(false); setSearch(''); } };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  useEffect(() => { if (isOpen && inputRef.current) inputRef.current.focus(); }, [isOpen]);
+
+  const handleSelect = (val: string) => { onChange(val); setIsOpen(false); setSearch(''); };
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button type="button" onClick={() => !disabled && setIsOpen(!isOpen)} disabled={disabled}
+        className={`w-full border rounded-md p-2 pr-14 text-left text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white flex items-center gap-1 ${disabled ? 'bg-gray-100 cursor-not-allowed border-gray-200' : 'border-gray-300 hover:border-gray-400'}`}>
+        <span className={selectedLabel ? 'text-gray-900 truncate' : 'text-gray-400 truncate'}>{selectedLabel || placeholder}</span>
+      </button>
+      <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
+        {value && !disabled && <button type="button" onClick={e => { e.stopPropagation(); onChange(''); setSearch(''); }} className="p-1 text-gray-400 hover:text-gray-600 rounded"><X size={12} /></button>}
+        <ChevronDown size={14} className={`text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+      </div>
+      {isOpen && (
+        <div className="absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-64 flex flex-col">
+          <div className="p-2 border-b border-gray-100">
+            <div className="relative">
+              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input ref={inputRef} type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="検索..."
+                className="w-full pl-8 pr-3 py-1.5 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500" />
+              {search && <button type="button" onClick={() => setSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"><X size={12} /></button>}
+            </div>
+          </div>
+          <div className="overflow-y-auto flex-1">
+            <button type="button" onClick={() => handleSelect('')}
+              className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 transition-colors ${!value ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-400'}`}>
+              {placeholder}
+            </button>
+            {grouped && groupedOptions ? (
+              Object.entries(groupedOptions).map(([group, opts]) => (
+                <div key={group}>
+                  <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 bg-gray-50 sticky top-0">{group}</div>
+                  {opts.map(opt => (
+                    <button key={opt.value} type="button" onClick={() => handleSelect(opt.value)}
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-blue-50 transition-colors ${value === opt.value ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700'}`}>
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              ))
+            ) : (
+              filteredOptions.map(opt => (
+                <button key={opt.value} type="button" onClick={() => handleSelect(opt.value)}
+                  className={`w-full text-left px-3 py-2 text-sm hover:bg-blue-50 transition-colors ${value === opt.value ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700'}`}>
+                  {opt.label}
+                </button>
+              ))
+            )}
+            {filteredOptions.length === 0 && <div className="px-3 py-4 text-sm text-gray-400 text-center">該当する項目がありません</div>}
+          </div>
+          <div className="px-3 py-1.5 border-t border-gray-100 text-xs text-gray-400">{filteredOptions.length} / {options.length} 件</div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ============================================
 // 型定義
@@ -21,7 +124,6 @@ interface DocumentWithEntry {
   documentDate: string | null;
   amount: number | null;
   taxAmount: number | null;
-  // journal_entry
   entryId: string | null;
   entryDate: string;
   description: string;
@@ -29,13 +131,11 @@ interface DocumentWithEntry {
   isExcluded: boolean;
   isBusiness: boolean;
   aiConfidence: number | null;
-  // journal_entry_lines (借方1行目)
   lineId: string | null;
   accountItemId: string;
   taxCategoryId: string;
   lineAmount: number;
   taxRate: number | null;
-  // 追加フィールド
   supplierId: string | null;
   itemId: string | null;
 }
@@ -47,7 +147,7 @@ interface TaxRateOption {
 }
 
 // ============================================
-// review.tsx
+// ReviewPage
 // ============================================
 export default function ReviewPage() {
   const { currentWorkflow, updateWorkflowData } = useWorkflow();
@@ -64,12 +164,39 @@ export default function ReviewPage() {
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [zoom, setZoom] = useState(100);
 
-  // 編集フォーム
   const [form, setForm] = useState<Partial<DocumentWithEntry>>({});
-
-  // ルール追加
   const [addRule, setAddRule] = useState(false);
   const [ruleIndustryId, setRuleIndustryId] = useState('');
+
+  // ============================================
+  // SearchableSelect 用オプション生成（メモ化）
+  // ============================================
+  const accountItemOptions: SearchableSelectOption[] = useMemo(
+    () => accountItems.map(a => ({ value: a.id, label: a.name })),
+    [accountItems]
+  );
+
+  const taxCategoryOptions: SearchableSelectOption[] = useMemo(
+    () => taxCategories.map(t => ({
+      value: t.id,
+      label: t.display_name || t.name,
+      group: t.direction === '仕入' ? '課対仕入' : t.direction === '売上' ? '課税売上' : t.direction || 'その他',
+    })),
+    [taxCategories]
+  );
+
+  const taxRateOptions: SearchableSelectOption[] = useMemo(
+    () => [
+      ...taxRates.map(r => ({ value: r.rate.toString(), label: `${r.name} (${Math.round(r.rate * 100)}%)` })),
+      { value: '0', label: '非課税 (0%)' },
+    ],
+    [taxRates]
+  );
+
+  const supplierTagOptions: SearchableSelectOption[] = useMemo(
+    () => supplierTags.map(t => ({ value: t.id, label: t.name })),
+    [supplierTags]
+  );
 
   // ============================================
   // データ読み込み
@@ -84,7 +211,6 @@ export default function ReviewPage() {
     setLoading(true);
     const clientId = currentWorkflow.clientId;
 
-    // 1. documents 取得
     const { data: docs } = await supabase
       .from('documents')
       .select('id, file_name, original_file_name, storage_path, file_path, supplier_name, document_date, amount, tax_amount')
@@ -94,14 +220,14 @@ export default function ReviewPage() {
 
     if (!docs || docs.length === 0) { setLoading(false); return; }
 
-    // 2. journal_entries (document_id IN) — FK ヒント名を削除して安全にJOIN
+    // FK ヒント付きで journal_entry_lines をJOIN（suppliers 曖昧性回避）
     const docIds = docs.map((d: any) => d.id);
     const { data: entries, error: entriesError } = await supabase
       .from('journal_entries')
       .select(`
         id, entry_date, description, status, is_excluded, ai_confidence,
         document_id,
-        journal_entry_lines (
+        journal_entry_lines!journal_entry_lines_journal_entry_id_fkey (
           id, debit_credit, account_item_id, tax_category_id, amount, tax_rate, description, supplier_id, item_id
         )
       `)
@@ -113,7 +239,6 @@ export default function ReviewPage() {
       console.error('仕訳取得エラー (review):', entriesError);
     }
 
-    // 3. マージ
     const merged: DocumentWithEntry[] = await Promise.all(
       docs.map(async (doc: any) => {
         const path = doc.storage_path || doc.file_path || '';
@@ -135,10 +260,6 @@ export default function ReviewPage() {
           documentDate: doc.document_date,
           amount: doc.amount,
           taxAmount: doc.tax_amount,
-          // -------------------------------------------------------
-          // 修正: journal_entry がある場合はそのデータ、
-          //       なければ OCR(documents) のデータで初期値を設定
-          // -------------------------------------------------------
           entryId: entry?.id || null,
           entryDate: entry?.entry_date || doc.document_date || new Date().toISOString().split('T')[0],
           description: entry?.description || doc.supplier_name || '',
@@ -164,7 +285,6 @@ export default function ReviewPage() {
       setRuleIndustryId('');
     }
 
-    // 4. マスタ取得
     const [accountsRes, taxRes] = await Promise.all([
       accountItemsApi.getAll(),
       taxCategoriesApi.getAll(),
@@ -172,26 +292,12 @@ export default function ReviewPage() {
     if (accountsRes.data) setAccountItems(accountsRes.data);
     if (taxRes.data) setTaxCategories(taxRes.data);
 
-    // tax_rates 取得
-    const { data: rates } = await supabase
-      .from('tax_rates')
-      .select('id, rate, name')
-      .eq('is_current', true)
-      .order('rate', { ascending: false });
+    const { data: rates } = await supabase.from('tax_rates').select('id, rate, name').eq('is_current', true).order('rate', { ascending: false });
     if (rates) setTaxRates(rates.map((r: any) => ({ id: r.id, rate: Number(r.rate), name: r.name })));
 
-    // タグ取得
-    const { data: tags } = await supabase
-      .from('tags')
-      .select('*')
-      .eq('is_active', true)
-      .in('tag_type', ['supplier', 'item'])
-      .order('name');
-    if (tags) {
-      setSupplierTags(tags.filter((t: any) => t.tag_type === 'supplier'));
-    }
+    const { data: tags } = await supabase.from('tags').select('*').eq('is_active', true).in('tag_type', ['supplier', 'item']).order('name');
+    if (tags) setSupplierTags(tags.filter((t: any) => t.tag_type === 'supplier'));
 
-    // 業種取得（ルール追加用）
     const { data: inds } = await supabase.from('industries').select('id, name').eq('is_active', true).order('sort_order');
     if (inds) setIndustries(inds);
 
@@ -218,27 +324,12 @@ export default function ReviewPage() {
     if (!item) return;
     setSaving(true);
 
-    // -------------------------------------------------------
-    // 修正: entryId が無い場合（journal_entry が未生成）は
-    //       新規 INSERT してから保存する
-    // -------------------------------------------------------
     let entryId = form.entryId;
 
     if (!entryId) {
-      // organization_id を取得
-      const { data: clientData } = await supabase
-        .from('clients')
-        .select('organization_id')
-        .eq('id', currentWorkflow!.clientId)
-        .single();
+      const { data: clientData } = await supabase.from('clients').select('organization_id').eq('id', currentWorkflow!.clientId).single();
+      if (!clientData?.organization_id) { console.error('organization_id が取得できませんでした'); setSaving(false); return; }
 
-      if (!clientData?.organization_id) {
-        console.error('organization_id が取得できませんでした');
-        setSaving(false);
-        return;
-      }
-
-      // 新規 journal_entry を作成
       const { data: newEntry, error: insertError } = await supabase
         .from('journal_entries')
         .insert({
@@ -252,18 +343,11 @@ export default function ReviewPage() {
           is_excluded: form.isExcluded || false,
           ai_generated: false,
         })
-        .select()
-        .single();
+        .select().single();
 
-      if (insertError || !newEntry) {
-        console.error('仕訳新規作成エラー:', insertError);
-        setSaving(false);
-        return;
-      }
-
+      if (insertError || !newEntry) { console.error('仕訳新規作成エラー:', insertError); setSaving(false); return; }
       entryId = newEntry.id;
 
-      // 借方明細行を作成
       const { data: newLine, error: lineInsertError } = await supabase
         .from('journal_entry_lines')
         .insert({
@@ -275,17 +359,11 @@ export default function ReviewPage() {
           tax_rate: form.taxRate || null,
           amount: form.lineAmount || 0,
         })
-        .select()
-        .single();
+        .select().single();
 
-      if (lineInsertError) {
-        console.error('明細行新規作成エラー:', lineInsertError);
-      }
-
-      // form state を更新
+      if (lineInsertError) console.error('明細行新規作成エラー:', lineInsertError);
       setForm(p => ({ ...p, entryId, lineId: newLine?.id || null }));
     } else {
-      // 既存の journal_entries を更新
       await supabase.from('journal_entries').update({
         entry_date: form.entryDate,
         description: form.description,
@@ -293,7 +371,6 @@ export default function ReviewPage() {
         status: form.isExcluded ? 'draft' : 'approved',
       }).eq('id', entryId);
 
-      // journal_entry_lines 更新
       if (form.lineId) {
         await supabase.from('journal_entry_lines').update({
           account_item_id: form.accountItemId || null,
@@ -304,27 +381,16 @@ export default function ReviewPage() {
       }
     }
 
-    // ルール追加
     if (addRule && form.accountItemId) {
-      const ruleData = {
+      const { error } = await supabase.from('processing_rules').insert([{
         rule_name: `${form.description || item.supplierName || '不明'} → 自動仕訳`,
-        priority: 100,
-        rule_type: '支出' as const,
+        priority: 100, rule_type: '支出' as const,
         scope: ruleIndustryId ? 'industry' as const : 'shared' as const,
         industry_id: ruleIndustryId || null,
-        conditions: {
-          supplier_pattern: item.supplierName || null,
-        },
-        actions: {
-          account_item_id: form.accountItemId || null,
-          tax_category_id: form.taxCategoryId || null,
-          description_template: form.description || null,
-        },
-        auto_apply: true,
-        require_confirmation: false,
-        is_active: true,
-      };
-      const { error } = await supabase.from('processing_rules').insert([ruleData]);
+        conditions: { supplier_pattern: item.supplierName || null },
+        actions: { account_item_id: form.accountItemId || null, tax_category_id: form.taxCategoryId || null, description_template: form.description || null },
+        auto_apply: true, require_confirmation: false, is_active: true,
+      }]);
       if (error) console.error('ルール追加エラー:', error);
     }
 
@@ -334,18 +400,12 @@ export default function ReviewPage() {
   };
 
   // ============================================
-  // 事業用/プライベート切り替え
+  // 事業用/プライベート
   // ============================================
   const setBusiness = (isBusiness: boolean) => {
     if (!isBusiness) {
-      // プライベート → 事業主貸に自動切替
       const jigyounushiKashi = accountItems.find(a => a.name === '事業主貸');
-      setForm(p => ({
-        ...p,
-        isBusiness: false,
-        isExcluded: false,
-        accountItemId: jigyounushiKashi?.id || p.accountItemId,
-      }));
+      setForm(p => ({ ...p, isBusiness: false, isExcluded: false, accountItemId: jigyounushiKashi?.id || p.accountItemId }));
     } else {
       setForm(p => ({ ...p, isBusiness: true, isExcluded: false }));
     }
@@ -355,22 +415,6 @@ export default function ReviewPage() {
     setForm(prev => ({ ...prev, isExcluded: !prev.isExcluded, isBusiness: prev.isExcluded }));
   };
 
-  // ============================================
-  // 税区分をグループ化
-  // ============================================
-  const groupedTaxCategories = (() => {
-    const groups: Record<string, TaxCategory[]> = {};
-    taxCategories.forEach(tc => {
-      const group = tc.direction || 'その他';
-      if (!groups[group]) groups[group] = [];
-      groups[group].push(tc);
-    });
-    return groups;
-  })();
-
-  // ============================================
-  // 次へ
-  // ============================================
   const handleBeforeNext = async (): Promise<boolean> => {
     await saveCurrentItem();
     updateWorkflowData({ reviewCompleted: true });
@@ -425,7 +469,6 @@ export default function ReviewPage() {
 
   return (
     <div className="flex flex-col h-screen bg-slate-50">
-      {/* ワークフローヘッダー */}
       <WorkflowHeader onBeforeNext={handleBeforeNext} nextLabel="仕訳出力へ" />
 
       {/* 証憑ナビゲーション */}
@@ -488,11 +531,8 @@ export default function ReviewPage() {
           <div className="p-3 border-b border-gray-100 flex items-center justify-between flex-shrink-0">
             <h2 className="font-bold text-sm">仕訳データ</h2>
             <div className="flex items-center gap-2">
-              {/* OCR読取情報バッジ */}
               {currentItem.supplierName && (
-                <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">
-                  OCR: {currentItem.supplierName}
-                </span>
+                <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">OCR: {currentItem.supplierName}</span>
               )}
               {currentItem.aiConfidence != null && (
                 <span className={`text-xs px-2 py-0.5 rounded-full ${
@@ -503,42 +543,21 @@ export default function ReviewPage() {
           </div>
 
           <div className="flex-1 p-4 flex flex-col gap-3 overflow-y-auto">
-            {/* 対象外バナー */}
             {form.isExcluded && (
               <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700 flex items-center gap-2">
                 <Ban size={16} />この証憑は対象外に設定されています
               </div>
             )}
 
-            {/* OCR読取結果サマリー（参考情報） */}
+            {/* OCR読取結果サマリー */}
             {(currentItem.supplierName || currentItem.amount || currentItem.documentDate) && (
               <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-1">
                 <p className="text-xs font-medium text-slate-500 mb-1">OCR読取結果（参考）</p>
                 <div className="grid grid-cols-3 gap-2 text-xs">
-                  {currentItem.supplierName && (
-                    <div>
-                      <span className="text-slate-400">取引先:</span>
-                      <span className="ml-1 font-medium text-slate-700">{currentItem.supplierName}</span>
-                    </div>
-                  )}
-                  {currentItem.amount != null && (
-                    <div>
-                      <span className="text-slate-400">金額:</span>
-                      <span className="ml-1 font-medium text-slate-700">¥{Number(currentItem.amount).toLocaleString()}</span>
-                    </div>
-                  )}
-                  {currentItem.documentDate && (
-                    <div>
-                      <span className="text-slate-400">日付:</span>
-                      <span className="ml-1 font-medium text-slate-700">{new Date(currentItem.documentDate).toLocaleDateString('ja-JP')}</span>
-                    </div>
-                  )}
-                  {currentItem.taxAmount != null && (
-                    <div>
-                      <span className="text-slate-400">税額:</span>
-                      <span className="ml-1 font-medium text-slate-700">¥{Number(currentItem.taxAmount).toLocaleString()}</span>
-                    </div>
-                  )}
+                  {currentItem.supplierName && <div><span className="text-slate-400">取引先:</span><span className="ml-1 font-medium text-slate-700">{currentItem.supplierName}</span></div>}
+                  {currentItem.amount != null && <div><span className="text-slate-400">金額:</span><span className="ml-1 font-medium text-slate-700">¥{Number(currentItem.amount).toLocaleString()}</span></div>}
+                  {currentItem.documentDate && <div><span className="text-slate-400">日付:</span><span className="ml-1 font-medium text-slate-700">{new Date(currentItem.documentDate).toLocaleDateString('ja-JP')}</span></div>}
+                  {currentItem.taxAmount != null && <div><span className="text-slate-400">税額:</span><span className="ml-1 font-medium text-slate-700">¥{Number(currentItem.taxAmount).toLocaleString()}</span></div>}
                 </div>
               </div>
             )}
@@ -559,66 +578,53 @@ export default function ReviewPage() {
                   className="w-full border border-green-200 bg-green-50/30 rounded-md p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
 
-              {/* 勘定科目 */}
+              {/* 勘定科目 — SearchableSelect */}
               <div className="space-y-1">
                 <label className="text-xs font-medium">勘定科目</label>
-                <div className="relative">
-                  <select value={form.accountItemId || ''} onChange={e => setForm(p => ({ ...p, accountItemId: e.target.value }))}
-                    className="w-full border border-gray-300 rounded-md p-2 pr-7 appearance-none text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
-                    <option value="">-- 選択 --</option>
-                    {accountItems.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-                  </select>
-                  <ChevronDown size={14} className="absolute right-2 top-3 text-gray-400 pointer-events-none" />
-                </div>
+                <SearchableSelect
+                  options={accountItemOptions}
+                  value={form.accountItemId || ''}
+                  onChange={val => setForm(p => ({ ...p, accountItemId: val }))}
+                  placeholder="-- 勘定科目を検索 --"
+                />
               </div>
 
-              {/* 税区分（direction グループ化） */}
+              {/* 税区分 — SearchableSelect（グループ化） */}
               <div className="space-y-1">
                 <label className="text-xs font-medium">税区分</label>
-                <div className="relative">
-                  <select value={form.taxCategoryId || ''} onChange={e => {
-                    const tc = taxCategories.find(t => t.id === e.target.value);
-                    // 税区分選択時に税率も自動セット（対応するtax_rateがあれば）
+                <SearchableSelect
+                  options={taxCategoryOptions}
+                  value={form.taxCategoryId || ''}
+                  onChange={val => {
+                    const tc = taxCategories.find(t => t.id === val);
                     const matchRate = taxRates.find(r => tc && tc.name.includes(`${Math.round(r.rate * 100)}%`));
-                    setForm(p => ({ ...p, taxCategoryId: e.target.value, taxRate: matchRate?.rate ?? p.taxRate }));
+                    setForm(p => ({ ...p, taxCategoryId: val, taxRate: matchRate?.rate ?? p.taxRate }));
                   }}
-                    className="w-full border border-gray-300 rounded-md p-2 pr-7 appearance-none text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
-                    <option value="">-- 選択 --</option>
-                    {Object.entries(groupedTaxCategories).map(([group, cats]) => (
-                      <optgroup key={group} label={group === '仕入' ? '課対仕入' : group === '売上' ? '課税売上' : group}>
-                        {cats.map(t => <option key={t.id} value={t.id}>{t.display_name || t.name}</option>)}
-                      </optgroup>
-                    ))}
-                  </select>
-                  <ChevronDown size={14} className="absolute right-2 top-3 text-gray-400 pointer-events-none" />
-                </div>
+                  placeholder="-- 税区分を検索 --"
+                  grouped
+                />
               </div>
 
-              {/* 税率 */}
+              {/* 税率 — SearchableSelect */}
               <div className="space-y-1">
                 <label className="text-xs font-medium flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-yellow-400"></span>税率</label>
-                <div className="relative">
-                  <select value={form.taxRate?.toString() || ''} onChange={e => setForm(p => ({ ...p, taxRate: e.target.value ? Number(e.target.value) : null }))}
-                    className="w-full border border-yellow-200 bg-yellow-50/30 rounded-md p-2 pr-7 appearance-none text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                    <option value="">-- 選択 --</option>
-                    {taxRates.map(r => <option key={r.id} value={r.rate}>{r.name} ({Math.round(r.rate * 100)}%)</option>)}
-                    <option value="0">非課税 (0%)</option>
-                  </select>
-                  <ChevronDown size={14} className="absolute right-2 top-3 text-gray-400 pointer-events-none" />
-                </div>
+                <SearchableSelect
+                  options={taxRateOptions}
+                  value={form.taxRate?.toString() || ''}
+                  onChange={val => setForm(p => ({ ...p, taxRate: val ? Number(val) : null }))}
+                  placeholder="-- 税率を選択 --"
+                />
               </div>
 
-              {/* 取引先タグ */}
+              {/* 取引先タグ — SearchableSelect */}
               <div className="space-y-1">
                 <label className="text-xs font-medium">取引先タグ</label>
-                <div className="relative">
-                  <select value="" onChange={() => { /* TODO: タグ紐付け処理 */ }}
-                    className="w-full border border-gray-300 rounded-md p-2 pr-7 appearance-none text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
-                    <option value="">-- 選択 --</option>
-                    {supplierTags.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                  </select>
-                  <ChevronDown size={14} className="absolute right-2 top-3 text-gray-400 pointer-events-none" />
-                </div>
+                <SearchableSelect
+                  options={supplierTagOptions}
+                  value=""
+                  onChange={() => { /* TODO: タグ紐付け処理 */ }}
+                  placeholder="-- タグを検索 --"
+                />
               </div>
 
               {/* 摘要 */}
@@ -632,7 +638,6 @@ export default function ReviewPage() {
             {/* 事業用 / プライベート / ルール追加 */}
             <div className="border border-gray-200 rounded-lg p-3 bg-slate-50 space-y-3">
               <div className="flex items-center justify-between">
-                {/* 事業用/プライベート */}
                 <div className="flex items-center gap-1 bg-white border border-gray-300 rounded-md p-1">
                   <button onClick={() => setBusiness(true)}
                     className={`px-3 py-1 text-sm rounded-md transition-colors ${form.isBusiness && !form.isExcluded ? 'bg-blue-600 text-white font-medium' : 'text-gray-600 hover:bg-gray-100'}`}>
@@ -643,8 +648,6 @@ export default function ReviewPage() {
                     プライベート
                   </button>
                 </div>
-
-                {/* 対象外 */}
                 <button onClick={toggleExclude}
                   className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border transition-colors ${
                     form.isExcluded ? 'bg-red-50 border-red-300 text-red-700' : 'border-gray-300 text-gray-600 hover:bg-gray-50'
@@ -653,7 +656,6 @@ export default function ReviewPage() {
                 </button>
               </div>
 
-              {/* ルール追加チェックボックス + 業種セレクト */}
               <div className="flex items-center gap-3">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input type="checkbox" checked={addRule} onChange={e => setAddRule(e.target.checked)}
@@ -670,11 +672,8 @@ export default function ReviewPage() {
               </div>
             </div>
 
-            {/* 仕訳ID */}
             {currentItem.entryId && (
-              <div className="text-xs text-gray-400 text-right">
-                仕訳ID: {currentItem.entryId.slice(0, 8)}...
-              </div>
+              <div className="text-xs text-gray-400 text-right">仕訳ID: {currentItem.entryId.slice(0, 8)}...</div>
             )}
           </div>
         </div>
