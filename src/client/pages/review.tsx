@@ -15,8 +15,9 @@ import type { AccountItem, TaxCategory, Tag } from '@/types';
 // ============================================
 interface SearchableSelectOption { value: string; label: string; group?: string; }
 
-function SearchableSelect({ options, value, onChange, placeholder = '-- 選択 --', disabled = false, grouped = false }: {
+function SearchableSelect({ options, value, onChange, placeholder = '-- 選択 --', disabled = false, grouped = false, onAdd }: {
   options: SearchableSelectOption[]; value: string; onChange: (v: string) => void; placeholder?: string; disabled?: boolean; grouped?: boolean;
+  onAdd?: (name: string) => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -28,6 +29,7 @@ function SearchableSelect({ options, value, onChange, placeholder = '-- 選択 -
   useEffect(() => { const h = (e: MouseEvent) => { if (containerRef.current && !containerRef.current.contains(e.target as Node)) { setIsOpen(false); setSearch(''); } }; document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h); }, []);
   useEffect(() => { if (isOpen && inputRef.current) inputRef.current.focus(); }, [isOpen]);
   const select = (v: string) => { onChange(v); setIsOpen(false); setSearch(''); };
+  const handleAdd = () => { if (onAdd && search.trim()) { onAdd(search.trim()); setSearch(''); setIsOpen(false); } };
   return (
     <div ref={containerRef} className="relative">
       <button type="button" onClick={() => !disabled && setIsOpen(!isOpen)} disabled={disabled}
@@ -50,9 +52,26 @@ function SearchableSelect({ options, value, onChange, placeholder = '-- 選択 -
               <div key={g}><div className="px-3 py-1.5 text-xs font-semibold text-gray-500 bg-gray-50 sticky top-0">{g}</div>
               {opts.map(o => <button key={o.value} type="button" onClick={() => select(o.value)} className={`w-full text-left px-3 py-2 text-sm hover:bg-blue-50 ${value === o.value ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700'}`}>{o.label}</button>)}</div>
             )) : filtered.map(o => <button key={o.value} type="button" onClick={() => select(o.value)} className={`w-full text-left px-3 py-2 text-sm hover:bg-blue-50 ${value === o.value ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700'}`}>{o.label}</button>)}
-            {filtered.length === 0 && <div className="px-3 py-4 text-sm text-gray-400 text-center">該当なし</div>}
+            {filtered.length === 0 && (
+              <div className="px-3 py-3 text-center">
+                <p className="text-sm text-gray-400 mb-2">該当なし</p>
+                {onAdd && search.trim() && (
+                  <button type="button" onClick={handleAdd}
+                    className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-md hover:bg-blue-700">
+                    「{search.trim()}」を新規追加
+                  </button>
+                )}
+              </div>
+            )}
           </div>
-          <div className="px-3 py-1.5 border-t border-gray-100 text-xs text-gray-400">{filtered.length} / {options.length} 件</div>
+          <div className="px-3 py-1.5 border-t border-gray-100 flex items-center justify-between">
+            <span className="text-xs text-gray-400">{filtered.length} / {options.length} 件</span>
+            {onAdd && search.trim() && filtered.length > 0 && (
+              <button type="button" onClick={handleAdd} className="text-xs text-blue-600 hover:text-blue-800">
+                + 「{search.trim()}」を追加
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -308,32 +327,47 @@ export default function ReviewPage() {
     }
 
     if (addRule && form.accountItemId) {
-      const ruleData: Record<string, any> = {
-        rule_name: `${form.description || item.supplierName || '不明'} → 自動仕訳`,
-        priority: 100,
-        rule_type: ruleType,
-        scope: ruleScope,
-        industry_id: ruleScope === 'industry' ? ruleIndustryId || null : null,
-        client_id: ruleScope === 'client' ? currentWorkflow!.clientId : null,
-        conditions: {
-          supplier_pattern: item.supplierName || null,
-          transaction_pattern: form.description || null,
-        },
-        actions: {
-          account_item_id: form.accountItemId,
-          tax_category_id: form.taxCategoryId || null,
-          description_template: form.description || null,
-        },
-        auto_apply: true,
-        require_confirmation: false,
-        is_active: true,
-      };
-      const { error } = await supabase.from('processing_rules').insert([ruleData]);
-      if (error) {
-        console.error('ルール追加エラー:', error);
-        alert('ルール追加に失敗しました: ' + error.message);
+      // organization_id を取得（RLS必須）
+      const { data: orgData } = await supabase
+        .from('clients').select('organization_id').eq('id', currentWorkflow!.clientId).single();
+      const orgId = orgData?.organization_id;
+
+      if (!orgId) {
+        alert('ルール追加に失敗しました: organization_id を取得できません');
       } else {
-        setAddRule(false);
+        const ruleData: Record<string, any> = {
+          organization_id: orgId,
+          rule_name: `${form.description || item.supplierName || '不明'} → 自動仕訳`,
+          priority: 100,
+          rule_type: ruleType,
+          scope: ruleScope,
+          industry_id: ruleScope === 'industry' ? ruleIndustryId || null : null,
+          client_id: ruleScope === 'client' ? currentWorkflow!.clientId : null,
+          conditions: {
+            supplier_pattern: item.supplierName || null,
+            transaction_pattern: form.description || null,
+          },
+          actions: {
+            account_item_id: form.accountItemId,
+            tax_category_id: form.taxCategoryId || null,
+            description_template: form.description || null,
+          },
+          auto_apply: true,
+          require_confirmation: false,
+          is_active: true,
+        };
+        const { error } = await supabase.from('processing_rules').insert([ruleData]);
+        if (error) {
+          console.error('ルール追加エラー:', { message: error.message, code: error.code, details: error.details, hint: error.hint });
+          if (error.code === '42501' || error.message?.includes('policy')) {
+            alert('ルール追加の権限がありません。\n\n管理者（admin）または税理士（accountant）ロールが必要です。\nユーザー権限管理で確認してください。');
+          } else {
+            alert(`ルール追加に失敗しました:\n${error.message}\n\ncode: ${error.code}`);
+          }
+        } else {
+          setAddRule(false);
+          setSavedAt(new Date().toLocaleTimeString('ja-JP') + ' ルール追加済');
+        }
       }
     }
 
@@ -360,6 +394,35 @@ export default function ReviewPage() {
       const j = accountItems.find(a => a.name === '事業主貸');
       setForm(p => ({ ...p, isBusiness: false, isExcluded: false, accountItemId: j?.id || p.accountItemId }));
     } else { setForm(p => ({ ...p, isBusiness: true, isExcluded: false })); }
+  };
+
+  // ============================================
+  // 取引先タグの新規追加（SearchableSelectのonAddから呼ばれる）
+  // ============================================
+  const handleCreateTag = async (name: string) => {
+    if (!name.trim()) return;
+
+    const { data: orgData } = await supabase
+      .from('clients').select('organization_id').eq('id', currentWorkflow!.clientId).single();
+    if (!orgData?.organization_id) { alert('organization_id の取得に失敗しました'); return; }
+
+    const { data: newTag, error } = await supabase.from('tags').insert({
+      organization_id: orgData.organization_id,
+      name: name.trim(),
+      tag_type: 'supplier',
+      is_active: true,
+    }).select().single();
+
+    if (error) {
+      console.error('タグ追加エラー:', error);
+      alert('タグの追加に失敗しました: ' + error.message);
+      return;
+    }
+
+    if (newTag) {
+      setSupplierTags(prev => [...prev, newTag]);
+      setForm(p => ({ ...p, tagId: newTag.id }));
+    }
   };
 
   const toggleExclude = () => setForm(p => ({ ...p, isExcluded: !p.isExcluded, isBusiness: p.isExcluded }));
@@ -563,7 +626,13 @@ export default function ReviewPage() {
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-medium">取引先タグ</label>
-                <SearchableSelect options={supplierTagOptions} value={form.tagId || ''} onChange={v => setForm(p => ({ ...p, tagId: v }))} placeholder="-- タグを検索 --" />
+                <SearchableSelect
+                  options={supplierTagOptions}
+                  value={form.tagId || ''}
+                  onChange={v => setForm(p => ({ ...p, tagId: v }))}
+                  placeholder="-- タグを検索 --"
+                  onAdd={handleCreateTag}
+                />
               </div>
               <div className="space-y-1 col-span-2">
                 <label className="text-xs font-medium">摘要</label>
