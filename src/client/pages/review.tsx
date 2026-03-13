@@ -63,7 +63,7 @@ function SearchableSelect({ options, value, onChange, placeholder = '-- 選択 -
 // 型定義
 // ============================================
 interface DocumentWithEntry {
-  docId: string; fileName: string; storagePath: string; imageUrl: string | null;
+  docId: string; fileName: string; storagePath: string; imageUrl: string | null; fileType: string;
   supplierName: string | null; documentDate: string | null; amount: number | null; taxAmount: number | null;
   entryId: string | null; entryDate: string; description: string; status: string;
   isExcluded: boolean; isBusiness: boolean; aiConfidence: number | null; requiresReview: boolean;
@@ -73,7 +73,7 @@ interface DocumentWithEntry {
 
 interface TaxRateOption { id: string; rate: number; name: string; }
 interface RuleSuggestion { ruleName: string; accountItemId: string; accountItemName: string; taxCategoryId: string; taxCategoryName: string; }
-type ReviewFilter = '全て' | '未承認' | '要確認' | '対象外';
+type ReviewFilter = '全て' | '承認済み' | '未承認' | '要確認' | '対象外';
 
 // ============================================
 // ReviewPage
@@ -108,6 +108,7 @@ export default function ReviewPage() {
   // フィルタ適用後のアイテム
   const filteredItems = useMemo(() => {
     if (reviewFilter === '全て') return items;
+    if (reviewFilter === '承認済み') return items.filter(i => i.status === 'approved' && !i.isExcluded);
     if (reviewFilter === '未承認') return items.filter(i => i.status !== 'approved' && !i.isExcluded);
     if (reviewFilter === '要確認') return items.filter(i => i.requiresReview);
     if (reviewFilter === '対象外') return items.filter(i => i.isExcluded);
@@ -135,7 +136,7 @@ export default function ReviewPage() {
 
     const { data: docs } = await supabase
       .from('documents')
-      .select('id, file_name, original_file_name, storage_path, file_path, supplier_name, document_date, amount, tax_amount')
+      .select('id, file_name, original_file_name, storage_path, file_path, file_type, supplier_name, document_date, amount, tax_amount')
       .eq('workflow_id', currentWorkflow.id).eq('client_id', clientId).order('created_at');
 
     if (!docs || docs.length === 0) { setLoading(false); return; }
@@ -143,7 +144,7 @@ export default function ReviewPage() {
     const docIds = docs.map((d: any) => d.id);
     const { data: entries } = await supabase
       .from('journal_entries')
-      .select(`id, entry_date, description, status, is_excluded, ai_confidence, requires_review, document_id,
+      .select(`id, entry_date, description, status, is_excluded, ai_confidence, document_id,
         journal_entry_lines!journal_entry_lines_journal_entry_id_fkey (id, debit_credit, account_item_id, tax_category_id, amount, tax_rate, description, supplier_id, item_id)`)
       .eq('client_id', clientId).in('document_id', docIds).in('status', ['draft', 'pending', 'approved']);
 
@@ -154,12 +155,12 @@ export default function ReviewPage() {
       const entry = entries?.find((e: any) => e.document_id === doc.id);
       const debitLine = entry?.journal_entry_lines?.find((l: any) => l.debit_credit === 'debit') || entry?.journal_entry_lines?.[0];
       return {
-        docId: doc.id, fileName: doc.original_file_name || doc.file_name, storagePath: path, imageUrl,
+        docId: doc.id, fileName: doc.original_file_name || doc.file_name, storagePath: path, imageUrl, fileType: doc.file_type || '',
         supplierName: doc.supplier_name, documentDate: doc.document_date, amount: doc.amount, taxAmount: doc.tax_amount,
         entryId: entry?.id || null, entryDate: entry?.entry_date || doc.document_date || new Date().toISOString().split('T')[0],
         description: entry?.description || doc.supplier_name || '', status: entry?.status || 'draft',
         isExcluded: entry?.is_excluded || false, isBusiness: !entry?.is_excluded, aiConfidence: entry?.ai_confidence || null,
-        requiresReview: entry?.requires_review || false,
+        requiresReview: false,
         lineId: debitLine?.id || null, accountItemId: debitLine?.account_item_id || '', taxCategoryId: debitLine?.tax_category_id || '',
         lineAmount: debitLine?.amount || doc.amount || 0, taxRate: debitLine?.tax_rate || null,
         supplierId: debitLine?.supplier_id || null, itemId: debitLine?.item_id || null,
@@ -325,7 +326,7 @@ export default function ReviewPage() {
     await saveCurrentItem();
     const entryId = form.entryId || items[currentIndex]?.entryId;
     if (!entryId) return;
-    await supabase.from('journal_entries').update({ status: 'approved', requires_review: false }).eq('id', entryId);
+    await supabase.from('journal_entries').update({ status: 'approved' }).eq('id', entryId);
     await insertApprovalLog(entryId, 'approved', '仕訳確認から承認');
     setItems(prev => prev.map((it, i) => i === currentIndex ? { ...it, status: 'approved', requiresReview: false } : it));
     setForm(p => ({ ...p, status: 'approved' }));
@@ -374,10 +375,10 @@ export default function ReviewPage() {
         <div className="flex items-center gap-4">
           {/* フィルタ */}
           <div className="flex rounded-md border border-gray-300 overflow-hidden">
-            {(['全て', '未承認', '要確認', '対象外'] as ReviewFilter[]).map(f => (
+            {(['全て', '承認済み', '未承認', '要確認', '対象外'] as ReviewFilter[]).map(f => (
               <button key={f} onClick={() => { setReviewFilter(f); }}
                 className={`px-2.5 py-1 text-xs font-medium transition-colors ${reviewFilter === f ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
-                {f}{f === '未承認' ? `(${statusCounts.draft})` : f === '要確認' ? `(${statusCounts.review})` : f === '対象外' ? `(${statusCounts.excluded})` : ''}
+                {f}{f === '承認済み' ? `(${statusCounts.approved})` : f === '未承認' ? `(${statusCounts.draft})` : f === '要確認' ? `(${statusCounts.review})` : f === '対象外' ? `(${statusCounts.excluded})` : ''}
               </button>
             ))}
           </div>
@@ -426,8 +427,18 @@ export default function ReviewPage() {
             </div>
           </div>
           <div className="flex-1 overflow-auto bg-slate-100 flex items-start justify-center p-4">
-            {currentItem.imageUrl ? <img src={currentItem.imageUrl} alt={currentItem.fileName} style={{ width: `${zoom}%`, maxWidth: 'none' }} className="rounded shadow-sm border border-gray-200 object-contain" />
-              : <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-2"><AlertCircle size={40} /><span className="text-sm">画像を読み込めませんでした</span></div>}
+            {currentItem.imageUrl ? (
+              currentItem.fileType?.includes('pdf') || currentItem.fileName?.toLowerCase().endsWith('.pdf') ? (
+                <iframe
+                  src={currentItem.imageUrl}
+                  title={currentItem.fileName}
+                  className="w-full h-full rounded shadow-sm border border-gray-200"
+                  style={{ minHeight: '500px' }}
+                />
+              ) : (
+                <img src={currentItem.imageUrl} alt={currentItem.fileName} style={{ width: `${zoom}%`, maxWidth: 'none' }} className="rounded shadow-sm border border-gray-200 object-contain" />
+              )
+            ) : <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-2"><AlertCircle size={40} /><span className="text-sm">画像を読み込めませんでした</span></div>}
           </div>
         </div>
 

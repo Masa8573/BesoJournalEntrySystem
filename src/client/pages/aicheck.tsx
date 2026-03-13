@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { CheckCircle, XCircle, Edit2, Save, X, AlertCircle, Loader, HelpCircle, Trash2, Square, CheckSquare } from 'lucide-react';
+import { CheckCircle, XCircle, Edit2, Save, X, AlertCircle, Loader, ShieldCheck, HelpCircle, Trash2, Square, CheckSquare } from 'lucide-react';
 import { supabase } from '@/client/lib/supabase';
 import { accountItemsApi, taxCategoriesApi } from '@/client/lib/api';
 import { useWorkflow } from '@/client/context/WorkflowContext';
@@ -78,7 +78,7 @@ export default function AiCheckPage() {
       .from('journal_entries')
       .select(`
         id, client_id, document_id, entry_date, description, status, notes,
-        ai_confidence, ai_generated, requires_review,
+        ai_confidence, ai_generated,
         journal_entry_lines!journal_entry_lines_journal_entry_id_fkey (
           id, line_number, debit_credit, account_item_id, tax_category_id, amount, description
         )
@@ -148,14 +148,13 @@ export default function AiCheckPage() {
   // 単発アクション
   // ============================================
   const handleApprove = async (id: string) => {
-    await supabase.from('journal_entries').update({ status: 'approved', requires_review: false }).eq('id', id);
+    await supabase.from('journal_entries').update({ status: 'approved' }).eq('id', id);
     await insertApprovalLog(id, 'approved');
     await loadData();
   };
 
-  const handleMarkReview = async (id: string) => {
-    await supabase.from('journal_entries').update({ requires_review: true }).eq('id', id);
-    await loadData();
+  const handleMarkReview = async (_id: string) => {
+    alert('「要確認」機能を使うには、先にDBマイグレーション（requires_reviewカラム追加）を実行してください。');
   };
 
   const handleReject = async (id: string) => {
@@ -171,16 +170,13 @@ export default function AiCheckPage() {
     const ids = [...selectedIds];
     if (ids.length === 0) return;
     if (!window.confirm(`${ids.length}件を一括承認しますか？`)) return;
-    await supabase.from('journal_entries').update({ status: 'approved', requires_review: false }).in('id', ids);
+    await supabase.from('journal_entries').update({ status: 'approved' }).in('id', ids);
     for (const id of ids) await insertApprovalLog(id, 'approved', '一括承認');
     await loadData();
   };
 
   const handleBulkMarkReview = async () => {
-    const ids = [...selectedIds];
-    if (ids.length === 0) return;
-    await supabase.from('journal_entries').update({ requires_review: true }).in('id', ids);
-    await loadData();
+    alert('「要確認」機能を使うには、先にDBマイグレーション（requires_reviewカラム追加）を実行してください。');
   };
 
   const handleBulkDelete = async () => {
@@ -265,14 +261,13 @@ export default function AiCheckPage() {
   // ステータス集計
   const approvedCount = entries.filter(e => e.status === 'approved').length;
   const draftCount = entries.filter(e => e.status === 'draft' || e.status === 'pending').length;
-  const reviewCount = entries.filter(e => e.requires_review).length;
+  const reviewCount = entries.filter(e => e.ai_confidence != null && e.ai_confidence < 0.7).length;
   const lowConfCount = entries.filter(e => e.ai_confidence != null && e.ai_confidence < 0.7).length;
   const allSelected = entries.length > 0 && selectedIds.size === entries.length;
 
   // 状態バッジ
   const getStatusBadge = (entry: EntryRow) => {
     if (entry.status === 'approved') return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800"><CheckCircle size={12} />承認済</span>;
-    if (entry.requires_review) return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800"><HelpCircle size={12} />要確認</span>;
     if (entry.ai_confidence != null && entry.ai_confidence < 0.7) return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800"><AlertCircle size={12} />低信頼度</span>;
     return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600"><Edit2 size={12} />未承認</span>;
   };
@@ -376,7 +371,7 @@ export default function AiCheckPage() {
                     {entries.map((entry) => {
                       const isEditing = editingId === entry.id;
                       const isSelected = selectedIds.has(entry.id);
-                      const rowBg = entry.status === 'approved' ? 'bg-green-50/50' : entry.requires_review ? 'bg-orange-50/50' : (entry.ai_confidence != null && entry.ai_confidence < 0.7) ? 'bg-yellow-50/50' : '';
+                      const rowBg = entry.status === 'approved' ? 'bg-green-50/50' : (entry.ai_confidence != null && entry.ai_confidence < 0.7) ? 'bg-yellow-50/50' : '';
 
                       return (
                         <tr key={entry.id} className={`hover:bg-gray-50 ${rowBg}`}>
@@ -424,7 +419,7 @@ export default function AiCheckPage() {
                                 {entry.status !== 'approved' && (
                                   <button onClick={() => handleApprove(entry.id)} className="p-1 text-green-600 hover:bg-green-50 rounded" title="承認"><CheckCircle size={16} /></button>
                                 )}
-                                <button onClick={() => handleMarkReview(entry.id)} className={`p-1 rounded ${entry.requires_review ? 'text-orange-600 bg-orange-50' : 'text-orange-400 hover:bg-orange-50'}`} title="要確認"><HelpCircle size={16} /></button>
+                                <button onClick={() => handleMarkReview(entry.id)} className="p-1 rounded text-orange-400 hover:bg-orange-50" title="要確認"><HelpCircle size={16} /></button>
                                 <button onClick={() => handleEdit(entry)} className="p-1 text-blue-600 hover:bg-blue-50 rounded" title="編集"><Edit2 size={16} /></button>
                                 <button onClick={() => handleReject(entry.id)} className="p-1 text-red-400 hover:bg-red-50 rounded" title="削除"><XCircle size={16} /></button>
                               </div>

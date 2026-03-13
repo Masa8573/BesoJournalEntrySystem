@@ -294,6 +294,17 @@ export default function ExportPage() {
     downloadCsv(csv, `freee取込_${name}_${dateStr}.csv`);
   };
 
+  // ワークフロー完了前の検証
+  const handleBeforeNext = async (): Promise<boolean> => {
+    if (draftCount > 0) {
+      const ok = window.confirm(
+        `未承認の仕訳が${draftCount}件あり、CSV出力対象から除外されています。\n\nこのままワークフローを完了しますか？\n「キャンセル」で戻って仕訳確認ページで承認できます。`
+      );
+      if (!ok) return false;
+    }
+    return true;
+  };
+
   if (!currentWorkflow && !clientId) {
     return (
       <div className="flex flex-col items-center justify-center h-full">
@@ -308,7 +319,7 @@ export default function ExportPage() {
 
   return (
     <div className="flex flex-col h-screen">
-      {currentWorkflow && <WorkflowHeader nextLabel="集計チェックへ（完了）" />}
+      {currentWorkflow && <WorkflowHeader onBeforeNext={handleBeforeNext} nextLabel="集計チェックへ（完了）" />}
 
       <div className="flex-1 overflow-y-auto p-6">
         <div className="max-w-6xl mx-auto space-y-6">
