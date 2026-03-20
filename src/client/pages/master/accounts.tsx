@@ -34,6 +34,7 @@ export default function AccountsPage() {
   const [formData, setFormData] = useState({
     code: '',
     name: '',
+    name_kana: '',
     category_id: '',
     tax_category_id: '',
     short_name: '',
@@ -131,6 +132,7 @@ export default function AccountsPage() {
     setFormData({
       code: item.code,
       name: item.name,
+      name_kana: item.name_kana ?? '',
       category_id: item.category_id,
       tax_category_id: item.tax_category_id ?? '',
       short_name: item.short_name ?? '',
@@ -152,6 +154,7 @@ export default function AccountsPage() {
     const itemData = {
       code: formData.code,
       name: formData.name,
+      name_kana: formData.name_kana || null,
       category_id: formData.category_id,
       tax_category_id: formData.tax_category_id || null,
       short_name: formData.short_name || null,
@@ -231,6 +234,7 @@ export default function AccountsPage() {
     setFormData({
       code: '',
       name: '',
+      name_kana: '',
       category_id: '',
       tax_category_id: '',
       short_name: '',
@@ -246,6 +250,7 @@ export default function AccountsPage() {
       item.name.toLowerCase().includes(q) ||
       item.code.toLowerCase().includes(q) ||
       (item.short_name?.toLowerCase().includes(q) ?? false) ||
+      (item.name_kana?.toLowerCase().includes(q) ?? false) ||
       (item.description?.toLowerCase().includes(q) ?? false);
 
     if (!matchesSearch) return false;
@@ -370,6 +375,7 @@ export default function AccountsPage() {
               <tr>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">コード</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">科目名</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">よみがな</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">区分</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">税区分</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">ショートカット</th>
@@ -380,7 +386,7 @@ export default function AccountsPage() {
             <tbody className="bg-white divide-y divide-gray-200">
               {filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-8 text-center text-gray-500">
+                  <td colSpan={8} className="px-6 py-8 text-center text-gray-500">
                     {accountItems.length === 0
                       ? '勘定科目が登録されていません。「新規勘定科目」から追加してください。'
                       : '検索条件に一致する勘定科目が見つかりませんでした'}
@@ -406,6 +412,7 @@ export default function AccountsPage() {
                         <p className="text-xs text-gray-500 mt-1">{item.description}</p>
                       )}
                     </td>
+                    <td className="px-4 py-3 text-xs text-gray-400">{item.name_kana || '-'}</td>
                     <td className="px-4 py-3">
                       <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
                         getCategoryFilter(item) === 'income' ? 'bg-blue-100 text-blue-700' :
@@ -501,6 +508,29 @@ export default function AccountsPage() {
 
           <div className="grid grid-cols-2 gap-4">
             <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">よみがな</label>
+              <input
+                type="text"
+                value={formData.name_kana}
+                onChange={(e) => setFormData({ ...formData, name_kana: e.target.value })}
+                className="input"
+                placeholder="例: げんきん"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">ショートカット</label>
+              <input
+                type="text"
+                value={formData.short_name}
+                onChange={(e) => setFormData({ ...formData, short_name: e.target.value })}
+                className="input"
+                placeholder="例: GENKIN"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 区分 <span className="text-red-500">*</span>
               </label>
@@ -536,16 +566,6 @@ export default function AccountsPage() {
           </div>
 
           <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">ショートカット</label>
-              <input
-                type="text"
-                value={formData.short_name}
-                onChange={(e) => setFormData({ ...formData, short_name: e.target.value })}
-                className="input"
-                placeholder="例: GENKIN"
-              />
-            </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">サブカテゴリ</label>
               <input

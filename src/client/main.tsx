@@ -15,6 +15,7 @@ import ReviewPage from './pages/review';
 import ExportPage from './pages/export';
 import SummaryPage from './pages/summary';
 import ExcludedPage from './pages/excluded';
+import ExcludedHistoryPage from './pages/excludedHistory';
 import LoginPage from './pages/login';
 
 // マスタ登録コンポーネント
@@ -132,6 +133,7 @@ function App() {
                       <Route path="/clients/:id/review" element={<ReviewPage />} />
                       <Route path="/clients/:id/export" element={<ExportPage />} />
                       <Route path="/clients/:id/excluded" element={<ExcludedPage />} />
+                      <Route path="/clients/:id/excluded-history" element={<ExcludedHistoryPage />} />
 
                       {/* 旧AIチェックURL → 仕訳確認にリダイレクト */}
                       <Route path="/clients/:id/aicheck" element={<AiCheckRedirect />} />

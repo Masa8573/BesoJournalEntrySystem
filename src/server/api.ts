@@ -8,8 +8,10 @@ import {
   generateJournalEntry,
   exportToFreee,
   mapLinesToDBFormat,
+  matchProcessingRules,
+  buildEntryFromRule,
 } from './services.js';
-import type { AccountItemRef, TaxCategoryRef } from './services.js';
+import type { AccountItemRef, TaxCategoryRef, GeneratedJournalEntry } from './services.js';
 
 const router = express.Router();
 
@@ -329,28 +331,96 @@ router.post('/journal-entries/generate', async (req: Request, res: Response) => 
     ]);
     console.log(`[仕訳生成] マスタ: 勘定科目=${accountItems.length}件, 税区分=${taxCategories.length}件, 雑費ID="${fallbackAccountId}"`);
 
-    // 3. AI仕訳生成
-    console.log('[仕訳生成] Gemini AI 呼び出し中...', {
-      supplier: ocr_result.extracted_supplier,
-      amount: ocr_result.extracted_amount,
-      industry,
-    });
+    // 2.5 ルールマッチング（B1: ルールが先、マッチしなければGemini）
+    const supplierName = ocr_result.extracted_supplier || '不明';
+    const amount = ocr_result.extracted_amount || 0;
 
-    const journalEntry = await generateJournalEntry({
-      date: ocr_result.extracted_date || new Date().toISOString().split('T')[0],
-      supplier: ocr_result.extracted_supplier || '不明',
-      amount: ocr_result.extracted_amount || 0,
-      tax_amount: ocr_result.extracted_tax_amount,
-      tax_details: ocr_result.transactions?.[0]?.tax_details || null,
-      items: ocr_result.extracted_items,
-      payment_method: ocr_result.extracted_payment_method || null,
-      invoice_number: ocr_result.extracted_invoice_number || null,
-      industry,
-      account_items: accountItems,
-      tax_categories: taxCategories,
-    });
+    // processing_rules を取得
+    const { data: rulesData } = await supabaseAdmin
+      .from('processing_rules')
+      .select('*')
+      .eq('is_active', true)
+      .order('priority', { ascending: true });
 
-    console.log(`[仕訳生成] ✅ AI完了: category="${journalEntry.category}", lines=${journalEntry.lines.length}件, confidence=${journalEntry.confidence}`);
+    // クライアントの業種IDを取得（client_industries 中間テーブル）
+    const { data: clientIndustries } = await supabaseAdmin
+      .from('client_industries')
+      .select('industry_id')
+      .eq('client_id', client_id);
+    
+    // フォールバック: clients.industry_id も取得
+    const { data: clientData } = await supabaseAdmin
+      .from('clients')
+      .select('industry_id')
+      .eq('id', client_id)
+      .single();
+    
+    const industryIds = [
+      ...(clientIndustries?.map((ci: any) => ci.industry_id) || []),
+      ...(clientData?.industry_id ? [clientData.industry_id] : []),
+    ].filter((id, idx, arr) => arr.indexOf(id) === idx); // 重複除去
+
+    let journalEntry!: GeneratedJournalEntry;
+    let ruleMatched = false;
+
+    if (rulesData && rulesData.length > 0) {
+      const matched = matchProcessingRules(rulesData, {
+        supplier: supplierName,
+        amount: amount,
+        description: ocr_result.extracted_supplier || '',
+        client_id: client_id,
+        industry_ids: industryIds,
+        payment_method: ocr_result.extracted_payment_method || null,
+      });
+
+      if (matched) {
+        // ルールマッチ → ルールベースで仕訳生成
+        journalEntry = buildEntryFromRule(matched, {
+          supplier: supplierName,
+          amount: amount,
+          tax_amount: ocr_result.extracted_tax_amount || null,
+          payment_method: ocr_result.extracted_payment_method || null,
+          date: ocr_result.extracted_date || new Date().toISOString().split('T')[0],
+        }, accountItems, taxCategories);
+        ruleMatched = true;
+
+        // match_count と last_matched_at を更新
+        await supabaseAdmin
+          .from('processing_rules')
+          .update({
+            match_count: (rulesData.find(r => r.id === matched.rule_id)?.match_count || 0) + 1,
+            last_matched_at: new Date().toISOString(),
+          })
+          .eq('id', matched.rule_id);
+
+        console.log(`[仕訳生成] ✅ ルールマッチ完了: "${matched.rule_name}", confidence=${matched.confidence}`);
+      }
+    }
+
+    if (!ruleMatched) {
+      // 3. AI仕訳生成（ルールマッチしなかった場合のみ）
+      console.log('[仕訳生成] Gemini AI 呼び出し中...', {
+        supplier: supplierName,
+        amount: amount,
+        industry,
+      });
+
+      journalEntry = await generateJournalEntry({
+        date: ocr_result.extracted_date || new Date().toISOString().split('T')[0],
+        supplier: supplierName,
+        amount: amount,
+        tax_amount: ocr_result.extracted_tax_amount,
+        tax_details: ocr_result.transactions?.[0]?.tax_details || null,
+        items: ocr_result.extracted_items,
+        payment_method: ocr_result.extracted_payment_method || null,
+        invoice_number: ocr_result.extracted_invoice_number || null,
+        industry,
+        account_items: accountItems,
+        tax_categories: taxCategories,
+      });
+
+      console.log(`[仕訳生成] ✅ AI完了: category="${journalEntry.category}", lines=${journalEntry.lines.length}件, confidence=${journalEntry.confidence}`);
+    }
 
     // 4. UUID マッピング
     const mappedLines = mapLinesToDBFormat(
@@ -372,6 +442,7 @@ router.post('/journal-entries/generate', async (req: Request, res: Response) => 
       reasoning: journalEntry.reasoning,
       lines: mappedLines,
       _raw_lines: journalEntry.lines,
+      rule_matched: ruleMatched,
     };
 
     res.json({

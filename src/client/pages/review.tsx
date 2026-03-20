@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   ZoomOut, ZoomIn, RotateCcw, ChevronLeft, ChevronRight,
-  ChevronDown, Ban, AlertCircle, Loader, CheckCircle, List, Eye, Search,
+  ChevronDown, Ban, AlertCircle, Loader, CheckCircle, List, Eye, Search, Undo2,
 } from 'lucide-react';
 import { useWorkflow } from '@/client/context/WorkflowContext';
 import { useSearchParams } from 'react-router-dom';
@@ -169,6 +169,11 @@ export default function ReviewPage() {
   const [taxRates, setTaxRates] = useState<TaxRateOption[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [industries, setIndustries] = useState<Array<{ id: string; name: string }>>([]);
+  const [itemsMaster, setItemsMaster] = useState<Array<{ id: string; name: string; code: string | null }>>([]);
+  const [tags, setTags] = useState<Array<{ id: string; name: string; tag_type: string }>>([]);
+  const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
+  const [businessRatio, setBusinessRatio] = useState(70); // C1: 家事按分率（デフォルト70%）
+  const [clientRatios, setClientRatios] = useState<Array<{ account_item_id: string; business_ratio: number }>>([]);
   const [loading, setLoading] = useState(true);
 
   // 一覧 state
@@ -259,6 +264,26 @@ export default function ReviewPage() {
     if (sData) setSuppliers(sData);
     const { data: inds } = await supabase.from('industries').select('id, name').eq('is_active', true).order('sort_order');
     if (inds) setIndustries(inds);
+
+    // C6: 品目マスタ取得
+    const { data: itemsData } = await supabase.from('items').select('id, name, code').eq('is_active', true).order('name');
+    if (itemsData) setItemsMaster(itemsData);
+
+    // C6: タグ取得（journal_entry/general タイプ）
+    const { data: tagsData } = await supabase.from('tags').select('id, name, tag_type').eq('is_active', true).in('tag_type', ['journal_entry', 'general']).order('name');
+    if (tagsData) setTags(tagsData);
+
+    // C1: 家事按分率取得（現在の顧客の按分設定）
+    if (currentWorkflow?.clientId) {
+      const { data: ratios } = await supabase
+        .from('client_account_ratios')
+        .select('account_item_id, business_ratio')
+        .eq('client_id', currentWorkflow.clientId)
+        .is('valid_until', null); // 現在有効な按分率のみ
+      // 按分データは後で勘定科目変更時に参照するため保持
+      if (ratios) setClientRatios(ratios);
+    }
+
     setLoading(false);
   };
 
@@ -272,15 +297,18 @@ export default function ReviewPage() {
       updates.taxCategoryId = ai.tax_category_id;
       const tc = taxCategories.find(t => t.id === ai.tax_category_id);
       if (tc?.current_tax_rate_id) {
-        // current_tax_rate_id から税率を直接取得（確実）
         const rate = taxRates.find(r => r.id === tc.current_tax_rate_id);
         if (rate) updates.taxRate = rate.rate;
       } else if (tc) {
-        // フォールバック: 税区分名から税率を推定
         const mr = taxRates.find(r => tc.name.includes(`${Math.round(r.rate * 100)}%`));
         if (mr) updates.taxRate = mr.rate;
-        else updates.taxRate = null; // 非課税・対象外は税率なし
+        else updates.taxRate = null;
       }
+    }
+    // C1: 按分率の自動セット（client_account_ratiosから）
+    const ratio = clientRatios.find(r => r.account_item_id === accountItemId);
+    if (ratio) {
+      setBusinessRatio(Math.round(Number(ratio.business_ratio) * 100));
     }
     setForm(p => ({ ...p, ...updates }));
   };
@@ -364,6 +392,34 @@ export default function ReviewPage() {
         auto_apply: true, require_confirmation: false, is_active: true,
       }]);
     }
+
+    // C6: タグ書き戻し（journal_entry_tags）
+    if (entryId && selectedTagIds.length > 0) {
+      // 既存タグを削除して再挿入（シンプルな差し替え方式）
+      await supabase.from('journal_entry_tags').delete().eq('journal_entry_id', entryId);
+      const tagInserts = selectedTagIds.map(tagId => ({ journal_entry_id: entryId, tag_id: tagId }));
+      await supabase.from('journal_entry_tags').insert(tagInserts);
+    } else if (entryId && selectedTagIds.length === 0) {
+      // タグを全削除
+      await supabase.from('journal_entry_tags').delete().eq('journal_entry_id', entryId);
+    }
+
+    // C1: 家事按分率の保存（プライベート設定時のみ）
+    if (!form.isBusiness && !form.isExcluded && form.accountItemId && businessRatio < 100 && currentWorkflow?.clientId) {
+      const { data: clientData } = await supabase.from('clients').select('organization_id').eq('id', currentWorkflow.clientId).single();
+      if (clientData?.organization_id) {
+        // upsert: 同一クライアント・勘定科目の既存レコードを更新
+        await supabase.from('client_account_ratios').upsert({
+          organization_id: clientData.organization_id,
+          client_id: currentWorkflow.clientId,
+          account_item_id: form.accountItemId,
+          business_ratio: businessRatio / 100,
+          valid_from: new Date().toISOString().split('T')[0],
+          notes: `仕訳確認画面から設定（${form.description || ''})`,
+        }, { onConflict: 'client_id,account_item_id,valid_from' });
+      }
+    }
+
     setItems(prev => prev.map((it, i) => i === currentIndex ? { ...it, ...form, entryId, status: targetStatus } as DocumentWithEntry : it));
     setSaving(false); setSavedAt(new Date().toLocaleTimeString('ja-JP'));
   };
@@ -374,6 +430,8 @@ export default function ReviewPage() {
     if (currentIndex < items.length - 1) {
       const next = currentIndex + 1;
       setCurrentIndex(next); setForm({ ...items[next] }); setSavedAt(null); setAddRule(false); setRuleIndustryId(''); setRotation(0);
+      setSelectedTagIds([]); setBusinessRatio(70); // C1/C6: リセット
+      loadTagsForEntry(items[next].entryId);
     }
   };
   const goPrev = async () => {
@@ -381,7 +439,16 @@ export default function ReviewPage() {
     if (currentIndex > 0) {
       const prev = currentIndex - 1;
       setCurrentIndex(prev); setForm({ ...items[prev] }); setSavedAt(null); setAddRule(false); setRuleIndustryId(''); setRotation(0);
+      setSelectedTagIds([]); setBusinessRatio(70); // C1/C6: リセット
+      loadTagsForEntry(items[prev].entryId);
     }
+  };
+
+  // C6: 既存タグをロード
+  const loadTagsForEntry = async (entryId: string | null) => {
+    if (!entryId) { setSelectedTagIds([]); return; }
+    const { data } = await supabase.from('journal_entry_tags').select('tag_id').eq('journal_entry_id', entryId);
+    if (data) setSelectedTagIds(data.map((d: any) => d.tag_id));
   };
 
   // 事業用/プライベート/対象外
@@ -392,6 +459,58 @@ export default function ReviewPage() {
     } else setForm(p => ({ ...p, isBusiness: true, isExcluded: false }));
   };
   const toggleExclude = () => setForm(p => ({ ...p, isExcluded: !p.isExcluded, isBusiness: p.isExcluded }));
+
+  // ============================================
+  // C2: 差し戻し機能
+  // approved → draft（税理士が戻す）
+  // posted → approved（確定解除）
+  // ============================================
+  const handleRevert = async (entryId: string, currentStatus: string) => {
+    if (currentStatus === 'approved') {
+      await supabase.from('journal_entries').update({ status: 'draft' }).eq('id', entryId);
+    } else if (currentStatus === 'posted') {
+      if (!window.confirm('確定済みの仕訳を再確認に戻しますか？')) return;
+      await supabase.from('journal_entries').update({ status: 'approved' }).eq('id', entryId);
+    }
+    await loadAllData();
+  };
+
+  // ============================================
+  // C5: ショートカットキー
+  // P: 事業用/プライベート切替
+  // R: ルール追加チェックボックス切替
+  // E: 対象外切替
+  // ←/→: 前へ/次へ（個別チェックモード時）
+  // ============================================
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    // input/textarea/select にフォーカスがある場合はスキップ
+    const tag = (e.target as HTMLElement).tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+    if (viewMode === 'detail') {
+      if (e.key === 'p' || e.key === 'P') {
+        e.preventDefault();
+        setBusiness(!form.isBusiness);
+      } else if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault();
+        setAddRule(prev => !prev);
+      } else if (e.key === 'e' || e.key === 'E') {
+        e.preventDefault();
+        toggleExclude();
+      } else if (e.key === 'ArrowRight' && currentIndex < items.length - 1) {
+        e.preventDefault();
+        goNext();
+      } else if (e.key === 'ArrowLeft' && currentIndex > 0) {
+        e.preventDefault();
+        goPrev();
+      }
+    }
+  }, [viewMode, form.isBusiness, currentIndex, items.length]);
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleKeyDown]);
 
   const groupedTaxCategories = useMemo(() => {
     const g: Record<string, TaxCategory[]> = {};
@@ -548,8 +667,18 @@ export default function ReviewPage() {
                         <td className="px-4 py-3 text-center">
                           {entry.is_excluded ? (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700"><Ban size={10} />対象外</span>
-                          ) : entry.status === 'approved' || entry.status === 'posted' ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800"><CheckCircle size={10} />確認済</span>
+                          ) : entry.status === 'posted' ? (
+                            <div className="flex items-center justify-center gap-1.5">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800"><CheckCircle size={10} />確定</span>
+                              <button onClick={(e) => { e.stopPropagation(); handleRevert(entry.id, 'posted'); }}
+                                className="p-0.5 text-purple-500 hover:bg-purple-50 rounded" title="確定解除"><Undo2 size={12} /></button>
+                            </div>
+                          ) : entry.status === 'approved' ? (
+                            <div className="flex items-center justify-center gap-1.5">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800"><CheckCircle size={10} />確認済</span>
+                              <button onClick={(e) => { e.stopPropagation(); handleRevert(entry.id, 'approved'); }}
+                                className="p-0.5 text-green-500 hover:bg-green-50 rounded" title="差し戻し"><Undo2 size={12} /></button>
+                            </div>
                           ) : needsReview ? (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800"><AlertCircle size={10} />要確認</span>
                           ) : (
@@ -702,8 +831,9 @@ export default function ReviewPage() {
                     {/* 品目 */}
                     <div>
                       <label className="text-xs font-semibold mb-1.5 block">品目</label>
-                      <input type="text" placeholder="品目を入力" value="" onChange={() => {}}
-                        className="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                      <SearchableSelect value={form.itemId || ''} onChange={id => setForm(p => ({ ...p, itemId: id || null }))}
+                        options={itemsMaster.map(it => ({ id: it.id, name: it.name, code: it.code || undefined, short_name: null }))}
+                        placeholder="品目を検索" />
                     </div>
 
                     {/* 摘要 */}
@@ -712,6 +842,50 @@ export default function ReviewPage() {
                       <input type="text" value={form.description || ''} onChange={e => setForm(p => ({ ...p, description: e.target.value }))}
                         placeholder="摘要を入力" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
                     </div>
+
+                    {/* C1: 家事按分 */}
+                    {form.isBusiness === false && !form.isExcluded && (
+                      <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-semibold text-orange-800">家事按分（事業用割合）</label>
+                          <span className="text-xs text-orange-600 font-medium">{businessRatio}% 事業用 / {100 - businessRatio}% 私用</span>
+                        </div>
+                        <input type="range" min={0} max={100} step={5} value={businessRatio}
+                          onChange={e => setBusinessRatio(Number(e.target.value))}
+                          className="w-full h-2 bg-orange-200 rounded-lg appearance-none cursor-pointer accent-orange-500" />
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div className="bg-white rounded p-2 border border-orange-200">
+                            <span className="text-orange-700 font-medium">事業用: </span>
+                            <span className="font-bold">¥{Math.round((form.lineAmount || 0) * businessRatio / 100).toLocaleString()}</span>
+                          </div>
+                          <div className="bg-white rounded p-2 border border-orange-200">
+                            <span className="text-gray-500 font-medium">私用: </span>
+                            <span className="font-bold">¥{Math.round((form.lineAmount || 0) * (100 - businessRatio) / 100).toLocaleString()}</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* C6: タグ */}
+                    {tags.length > 0 && (
+                      <div>
+                        <label className="text-xs font-semibold mb-1.5 block">タグ</label>
+                        <div className="flex flex-wrap gap-1.5">
+                          {tags.map(tag => {
+                            const isSelected = selectedTagIds.includes(tag.id);
+                            return (
+                              <button key={tag.id} type="button"
+                                onClick={() => setSelectedTagIds(prev => isSelected ? prev.filter(id => id !== tag.id) : [...prev, tag.id])}
+                                className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${
+                                  isSelected ? 'bg-blue-100 border-blue-300 text-blue-700 font-medium' : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
+                                }`}>
+                                {tag.name}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
 
                     {/* 事業用/プライベート + ルール追加 */}
                     <div className="border border-gray-200 rounded-lg p-3 bg-gray-50 flex items-center justify-between flex-wrap gap-2">

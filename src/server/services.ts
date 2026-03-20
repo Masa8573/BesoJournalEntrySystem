@@ -430,6 +430,257 @@ JSONのみを返してください。`;
 }
 
 // ============================================
+// ルールマッチングエンジン（B1）
+// processing_rules テーブルから条件にマッチするルールを検索し、
+// 仕訳データを生成する。マッチしなければ null を返す。
+// ============================================
+
+export interface RuleMatchInput {
+  supplier: string;
+  amount: number;
+  description?: string;
+  client_id: string;
+  industry_ids: string[];  // クライアントに紐づく業種ID一覧
+  payment_method?: string | null;
+}
+
+export interface MatchedRule {
+  rule_id: string;
+  rule_name: string;
+  account_item_id: string;
+  tax_category_id: string | null;
+  description_template: string | null;
+  business_ratio: number | null;
+  confidence: number;
+}
+
+/**
+ * processing_rules からマッチするルールを検索する。
+ * 優先順位: client（顧客別）> industry（業種別）> shared（共通）
+ * 同一スコープ内では priority が小さいほど優先。
+ *
+ * @param rules - Supabase から取得した processing_rules の配列
+ * @param input - マッチング入力（取引先名、金額等）
+ * @returns マッチしたルール情報、またはマッチしなければ null
+ */
+export function matchProcessingRules(
+  rules: Array<{
+    id: string;
+    rule_name: string;
+    priority: number;
+    scope: string;
+    rule_type: string;
+    client_id: string | null;
+    industry_id: string | null;
+    conditions: {
+      supplier_pattern?: string | null;
+      transaction_pattern?: string | null;
+      amount_min?: number | null;
+      amount_max?: number | null;
+    };
+    actions: {
+      account_item_id?: string | null;
+      tax_category_id?: string | null;
+      description_template?: string | null;
+      business_ratio?: number | null;
+    };
+    is_active: boolean;
+  }>,
+  input: RuleMatchInput
+): MatchedRule | null {
+  // アクティブなルールのみ
+  const activeRules = rules.filter(r => r.is_active);
+
+  // スコープ別にフィルタリング
+  const clientRules = activeRules.filter(r => r.scope === 'client' && r.client_id === input.client_id);
+  const industryRules = activeRules.filter(r => r.scope === 'industry' && r.industry_id && input.industry_ids.includes(r.industry_id));
+  const sharedRules = activeRules.filter(r => r.scope === 'shared');
+
+  // 優先順位: client > industry > shared
+  const orderedRules = [
+    ...clientRules.sort((a, b) => a.priority - b.priority),
+    ...industryRules.sort((a, b) => a.priority - b.priority),
+    ...sharedRules.sort((a, b) => a.priority - b.priority),
+  ];
+
+  for (const rule of orderedRules) {
+    if (matchesConditions(rule.conditions, input)) {
+      if (!rule.actions.account_item_id) continue; // 勘定科目なしのルールはスキップ
+
+      console.log(`[ルールマッチ] ✅ マッチ: "${rule.rule_name}" (priority=${rule.priority}, scope=${rule.scope})`);
+
+      return {
+        rule_id: rule.id,
+        rule_name: rule.rule_name,
+        account_item_id: rule.actions.account_item_id,
+        tax_category_id: rule.actions.tax_category_id || null,
+        description_template: rule.actions.description_template || null,
+        business_ratio: rule.actions.business_ratio || null,
+        confidence: 0.95, // ルールマッチは高信頼度
+      };
+    }
+  }
+
+  console.log(`[ルールマッチ] ルールマッチなし → Gemini AI にフォールバック`);
+  return null;
+}
+
+/**
+ * ルールの conditions が入力にマッチするか判定
+ */
+function matchesConditions(
+  conditions: {
+    supplier_pattern?: string | null;
+    transaction_pattern?: string | null;
+    amount_min?: number | null;
+    amount_max?: number | null;
+  },
+  input: RuleMatchInput
+): boolean {
+  // 取引先パターン（部分一致、大文字小文字無視）
+  if (conditions.supplier_pattern) {
+    const pattern = conditions.supplier_pattern.toLowerCase();
+    const supplier = input.supplier.toLowerCase();
+    if (!supplier.includes(pattern)) return false;
+  }
+
+  // 摘要パターン（部分一致）
+  if (conditions.transaction_pattern) {
+    const pattern = conditions.transaction_pattern.toLowerCase();
+    const desc = (input.description || '').toLowerCase();
+    const supplier = input.supplier.toLowerCase();
+    // 摘要 or 取引先名に含まれていればマッチ
+    if (!desc.includes(pattern) && !supplier.includes(pattern)) return false;
+  }
+
+  // 金額範囲
+  if (conditions.amount_min != null && input.amount < conditions.amount_min) return false;
+  if (conditions.amount_max != null && input.amount > conditions.amount_max) return false;
+
+  // 条件が一つもない場合はマッチしない（全一致防止）
+  if (!conditions.supplier_pattern && !conditions.transaction_pattern &&
+      conditions.amount_min == null && conditions.amount_max == null) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * ルールマッチ結果から GeneratedJournalEntry 互換の仕訳データを生成
+ */
+export function buildEntryFromRule(
+  matched: MatchedRule,
+  input: {
+    supplier: string;
+    amount: number;
+    tax_amount: number | null;
+    payment_method: string | null;
+    date: string;
+  },
+  accountItems: AccountItemRef[],
+  taxCategories: TaxCategoryRef[]
+): GeneratedJournalEntry {
+  const account = accountItems.find(a => a.id === matched.account_item_id);
+  const taxCat = matched.tax_category_id ? taxCategories.find(t => t.id === matched.tax_category_id) : null;
+
+  // 摘要テンプレート展開
+  const description = matched.description_template
+    ? matched.description_template.replace('{supplier}', input.supplier)
+    : input.supplier;
+
+  // 税率を税区分から推定
+  const taxRate = taxCat?.rate ?? (input.tax_amount ? 0.10 : null);
+
+  // 貸方の勘定科目を支払方法から決定
+  const creditAccountName = (() => {
+    switch (input.payment_method) {
+      case 'credit_card': return '未払金';
+      case 'bank_transfer': return '普通預金';
+      case 'e_money': return '未払金';
+      default: return '現金';
+    }
+  })();
+
+  // 家事按分がある場合
+  if (matched.business_ratio != null && matched.business_ratio < 1) {
+    const businessAmount = Math.round(input.amount * matched.business_ratio);
+    const personalAmount = input.amount - businessAmount;
+    const businessTax = input.tax_amount ? Math.round(input.tax_amount * matched.business_ratio) : null;
+    const personalTax = input.tax_amount ? (input.tax_amount - (businessTax || 0)) : null;
+
+    return {
+      category: '事業用',
+      notes: description,
+      confidence: matched.confidence,
+      reasoning: `ルール「${matched.rule_name}」に基づく自動仕訳（家事按分${Math.round(matched.business_ratio * 100)}%）`,
+      lines: [
+        {
+          line_number: 1,
+          debit_credit: 'debit',
+          account_item_name: account?.name || '雑費',
+          tax_category_name: taxCat?.name || null,
+          amount: businessAmount,
+          tax_rate: taxRate,
+          tax_amount: businessTax,
+          description: `${description}（事業用${Math.round(matched.business_ratio * 100)}%）`,
+        },
+        {
+          line_number: 2,
+          debit_credit: 'debit',
+          account_item_name: '事業主貸',
+          tax_category_name: '対象外',
+          amount: personalAmount,
+          tax_rate: null,
+          tax_amount: null,
+          description: `${description}（私用${Math.round((1 - matched.business_ratio) * 100)}%）`,
+        },
+        {
+          line_number: 3,
+          debit_credit: 'credit',
+          account_item_name: creditAccountName,
+          tax_category_name: null,
+          amount: input.amount,
+          tax_rate: null,
+          tax_amount: null,
+          description: description,
+        },
+      ],
+    };
+  }
+
+  // 通常（按分なし）
+  return {
+    category: '事業用',
+    notes: description,
+    confidence: matched.confidence,
+    reasoning: `ルール「${matched.rule_name}」に基づく自動仕訳`,
+    lines: [
+      {
+        line_number: 1,
+        debit_credit: 'debit',
+        account_item_name: account?.name || '雑費',
+        tax_category_name: taxCat?.name || null,
+        amount: input.amount,
+        tax_rate: taxRate,
+        tax_amount: input.tax_amount,
+        description: description,
+      },
+      {
+        line_number: 2,
+        debit_credit: 'credit',
+        account_item_name: creditAccountName,
+        tax_category_name: null,
+        amount: input.amount,
+        tax_rate: null,
+        tax_amount: null,
+        description: description,
+      },
+    ],
+  };
+}
+
+// ============================================
 // ユーティリティ: AI出力の名前 → DB UUID マッピング
 // ============================================
 
