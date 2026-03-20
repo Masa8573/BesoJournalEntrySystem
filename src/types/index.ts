@@ -303,7 +303,10 @@ export interface Supplier {
   name_kana: string | null;
   invoice_number: string | null;
   is_invoice_registered: boolean;
+  default_account_item_id: string | null;
+  default_tax_category_id: string | null;
   is_active: boolean;
+  notes: string | null;
   created_at: string;
   updated_at: string;
 }

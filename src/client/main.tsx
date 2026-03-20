@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import type { User } from '@supabase/supabase-js';
 import { supabase } from './lib/supabase';
 import { WorkflowProvider } from './context/WorkflowContext';
@@ -11,7 +11,6 @@ import './index.css';
 import ClientsPage from './pages/clients';
 import UploadPage from './pages/upload';
 import OCRPage from './pages/ocr';
-import AiCheckPage from './pages/aicheck';
 import ReviewPage from './pages/review';
 import ExportPage from './pages/export';
 import SummaryPage from './pages/summary';
@@ -28,45 +27,32 @@ import SuppliersPage from './pages/master/suppliers';
 import SettingsPage from './pages/settings';
 
 // ============================================================
-// AuthContext 型定義
+// Auth Context（認証状態管理）
 // ============================================================
 interface AuthContextType {
   user: User | null;
   loading: boolean;
 }
 
-// ============================================================
-// AuthContext 作成（export して Layout.tsx からも参照可能にする）
-// ============================================================
-export const AuthContext = createContext<AuthContextType>({
-  user: null,
-  loading: true,
-});
+const AuthContext = createContext<AuthContextType>({ user: null, loading: true });
 
-// AuthContext を使うためのカスタムフック
-export function useAuth(): AuthContextType {
+export function useAuth() {
   return useContext(AuthContext);
 }
 
-// ============================================================
-// AuthProvider
-// Supabase のセッションを監視し、user / loading を管理する
-// ============================================================
 function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // 1. 初回マウント時に既存セッションを確認
+    // 初期セッション取得
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       setLoading(false);
     });
 
-    // 2. ログイン・ログアウト・セッション更新を自動検知
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    // 認証状態変化の監視
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
       setLoading(false);
     });
@@ -82,17 +68,17 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
 }
 
 // ============================================================
-// PrivateRoute
+// PrivateRoute（認証必須ガード）
 // ============================================================
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen bg-gray-50">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
-          <p className="text-sm text-gray-500">読み込み中...</p>
+      <div className="min-h-screen flex items-center justify-center bg-gray-100">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-gray-600">読み込み中...</p>
         </div>
       </div>
     );
@@ -103,6 +89,14 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
   }
 
   return <>{children}</>;
+}
+
+// ============================================================
+// AIチェック旧URL → 仕訳確認へリダイレクト
+// ============================================================
+function AiCheckRedirect() {
+  const { id } = useParams<{ id: string }>();
+  return <Navigate to={`/clients/${id}/review`} replace />;
 }
 
 // ============================================================
@@ -127,26 +121,28 @@ function App() {
                       {/* デフォルトルート */}
                       <Route path="/" element={<Navigate to="/clients" replace />} />
 
-                      {/* 顧客一覧 */}
+                      {/* 業務メニュー */}
                       <Route path="/clients" element={<ClientsPage />} />
 
-                      {/* ワークフロー系（/clients/:id/ 配下） */}
-                      <Route path="/clients/:id/upload"   element={<UploadPage />} />
-                      <Route path="/clients/:id/ocr"      element={<OCRPage />} />
-                      <Route path="/clients/:id/aicheck"  element={<AiCheckPage />} />
-                      <Route path="/clients/:id/review"   element={<ReviewPage />} />
-                      <Route path="/clients/:id/export"   element={<ExportPage />} />
-                      <Route path="/clients/:id/summary"  element={<SummaryPage />} />
+                      {/* ワークフロー（/clients/:id/xxx）*/}
+                      <Route path="/clients/:id/summary" element={<SummaryPage />} />
+                      <Route path="/clients/:id/upload" element={<UploadPage />} />
+                      <Route path="/clients/:id/ocr" element={<OCRPage />} />
+                      <Route path="/clients/:id/review" element={<ReviewPage />} />
+                      <Route path="/clients/:id/export" element={<ExportPage />} />
                       <Route path="/clients/:id/excluded" element={<ExcludedPage />} />
 
+                      {/* 旧AIチェックURL → 仕訳確認にリダイレクト */}
+                      <Route path="/clients/:id/aicheck" element={<AiCheckRedirect />} />
+
                       {/* マスタ管理 */}
-                      <Route path="/master/rules"          element={<RulesPage />} />
-                      <Route path="/master/accounts"       element={<AccountsPage />} />
-                      <Route path="/master/tags"           element={<TagsPage />} />
+                      <Route path="/master/rules" element={<RulesPage />} />
+                      <Route path="/master/accounts" element={<AccountsPage />} />
+                      <Route path="/master/tags" element={<TagsPage />} />
                       <Route path="/master/tax-categories" element={<TaxCategoriesPage />} />
-                      <Route path="/master/industries"     element={<IndustriesPage />} />
-                      <Route path="/master/suppliers"      element={<SuppliersPage />} />
-                      <Route path="/settings"              element={<SettingsPage />} />
+                      <Route path="/master/industries" element={<IndustriesPage />} />
+                      <Route path="/master/suppliers" element={<SuppliersPage />} />
+                      <Route path="/settings" element={<SettingsPage />} />
 
                       {/* 404 */}
                       <Route path="*" element={<Navigate to="/clients" replace />} />
