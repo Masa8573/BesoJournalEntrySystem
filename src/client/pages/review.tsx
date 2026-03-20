@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   ZoomOut, ZoomIn, RotateCcw, ChevronLeft, ChevronRight,
-  ChevronDown, Ban, AlertCircle, Loader, CheckCircle, List, Eye, Search,
+  ChevronDown, Ban, AlertCircle, Loader, CheckCircle, Save,
+  ShieldCheck, List, Eye, Search,
 } from 'lucide-react';
 import { useWorkflow } from '@/client/context/WorkflowContext';
 import { useSearchParams } from 'react-router-dom';
@@ -16,7 +17,7 @@ import type { AccountItem, TaxCategory, Supplier } from '@/types';
 interface SearchableSelectProps {
   value: string;
   onChange: (value: string) => void;
-  options: Array<{ id: string; name: string; code?: string; short_name?: string | null }>;
+  options: Array<{ id: string; name: string; code?: string; short_name?: string | null; name_kana?: string | null }>;
   placeholder?: string;
 }
 
@@ -41,8 +42,9 @@ function SearchableSelect({ value, onChange, options, placeholder = '-- 選択 -
     return options.filter(o => {
       const name = o.name.toLowerCase();
       const shortName = (o.short_name || '').toLowerCase();
+      const nameKana = (o.name_kana || '').toLowerCase();
       const code = (o.code || '').toLowerCase();
-      return name.includes(q) || shortName.includes(q) || code.includes(q) || code.startsWith(q);
+      return name.includes(q) || shortName.includes(q) || nameKana.includes(q) || code.includes(q) || code.startsWith(q);
     });
   }, [query, options]);
 
@@ -270,7 +272,16 @@ export default function ReviewPage() {
     if (ai?.tax_category_id) {
       updates.taxCategoryId = ai.tax_category_id;
       const tc = taxCategories.find(t => t.id === ai.tax_category_id);
-      if (tc) { const mr = taxRates.find(r => tc.name.includes(`${Math.round(r.rate * 100)}%`)); if (mr) updates.taxRate = mr.rate; }
+      if (tc?.current_tax_rate_id) {
+        // current_tax_rate_id から税率を直接取得（確実）
+        const rate = taxRates.find(r => r.id === tc.current_tax_rate_id);
+        if (rate) updates.taxRate = rate.rate;
+      } else if (tc) {
+        // フォールバック: 税区分名から税率を推定
+        const mr = taxRates.find(r => tc.name.includes(`${Math.round(r.rate * 100)}%`));
+        if (mr) updates.taxRate = mr.rate;
+        else updates.taxRate = null; // 非課税・対象外は税率なし
+      }
     }
     setForm(p => ({ ...p, ...updates }));
   };
@@ -647,7 +658,7 @@ export default function ReviewPage() {
                       <div>
                         <label className="text-xs font-semibold mb-1.5 flex items-center gap-1">勘定科目 <span className="text-[10px] text-gray-400 font-normal">ローマ字・番号可</span></label>
                         <SearchableSelect value={form.accountItemId || ''} onChange={handleAccountItemChange}
-                          options={accountItems.map(a => ({ id: a.id, name: a.name, code: a.code, short_name: a.short_name }))}
+                          options={accountItems.map(a => ({ id: a.id, name: a.name, code: a.code, short_name: a.short_name, name_kana: a.name_kana }))}
                           placeholder="勘定科目を検索" />
                       </div>
                       <div>
@@ -655,8 +666,14 @@ export default function ReviewPage() {
                         <div className="relative">
                           <select value={form.taxCategoryId || ''} onChange={e => {
                             const tc = taxCategories.find(t => t.id === e.target.value);
-                            const mr = taxRates.find(r => tc && tc.name.includes(`${Math.round(r.rate * 100)}%`));
-                            setForm(p => ({ ...p, taxCategoryId: e.target.value, taxRate: mr?.rate ?? p.taxRate }));
+                            let newRate = form.taxRate;
+                            if (tc?.current_tax_rate_id) {
+                              const rate = taxRates.find(r => r.id === tc.current_tax_rate_id);
+                              newRate = rate?.rate ?? null;
+                            } else {
+                              newRate = null; // 非課税・対象外
+                            }
+                            setForm(p => ({ ...p, taxCategoryId: e.target.value, taxRate: newRate }));
                           }}
                             className="w-full border border-gray-300 rounded-lg p-2.5 pr-8 text-sm bg-white appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500">
                             <option value="">-- 選択 --</option>
