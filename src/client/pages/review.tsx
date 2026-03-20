@@ -610,11 +610,11 @@ export default function ReviewPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleKeyDown]);
 
-  const groupedTaxCategories = useMemo(() => {
+  /*const groupedTaxCategories = useMemo(() => {
     const g: Record<string, TaxCategory[]> = {};
     taxCategories.forEach(tc => { const k = tc.direction || 'その他'; if (!g[k]) g[k] = []; g[k].push(tc); });
     return g;
-  }, [taxCategories]);
+  }, [taxCategories]);*/
 
   // ワークフロー次へ（仕訳出力に進む前に全件確定）
   const handleBeforeNext = async (): Promise<boolean> => {

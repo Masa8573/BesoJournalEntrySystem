@@ -253,8 +253,8 @@ export default function RulesPage() {
         // 同じ取引先パターン AND 同じ勘定科目
         const sameSupplier = a.conditions?.supplier_pattern && b.conditions?.supplier_pattern &&
           a.conditions.supplier_pattern.toLowerCase() === b.conditions.supplier_pattern.toLowerCase();
-        const sameAccount = a.actions?.account_item_id && b.actions?.account_item_id &&
-          a.actions.account_item_id === b.actions.account_item_id;
+        /*const sameAccount = a.actions?.account_item_id && b.actions?.account_item_id &&
+          a.actions.account_item_id === b.actions.account_item_id;*/
         // 同じ取引先パターン（勘定科目違い）も警告
         if (sameSupplier) {
           dups.push({ rule1: a, rule2: b });
