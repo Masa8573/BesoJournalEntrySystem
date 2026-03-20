@@ -82,7 +82,44 @@ function getCreditLine(entry: EntryWithJoin) { return entry.lines?.find(l => l.d
 function getEntryAmount(entry: EntryWithJoin) { return entry.lines?.filter(l => l.debit_credit === 'debit').reduce((s, l) => s + (l.amount ?? 0), 0) ?? 0; }
 
 // ============================================
-// freee CSV生成
+// シンプルCSV生成（Tax Copilot独自形式）
+// ============================================
+function buildSimpleCsv(entries: EntryWithJoin[]): string {
+  const headers = [
+    '収支区分', '取引日', '取引先タグ', '勘定科目', '税区分', '金額', '品目タグ', '決済日', '決済口座', '決済金額'
+  ];
+  const rows: string[][] = [];
+  entries.forEach(entry => {
+    const debit = getDebitLine(entry);
+    const credit = getCreditLine(entry);
+    if (!debit) return;
+    const accountName = entry._debitAccountName || '';
+    const taxCatName = entry._debitTaxCatName || '';
+    const amount = debit.amount?.toString() || '0';
+    const isIncome = accountName.includes('売上') || accountName.includes('収入');
+    const creditAccountName = credit ? (entry.lines?.find(l => l.debit_credit === 'credit')?.description || '') : '';
+
+    rows.push([
+      isIncome ? '収入' : '支出',
+      entry.entry_date?.replace(/-/g, '/') || '',
+      entry.description || '', // 取引先タグ（摘要で代用）
+      accountName,
+      taxCatName,
+      amount,
+      '', // 品目タグ
+      credit ? entry.entry_date?.replace(/-/g, '/') || '' : '',
+      creditAccountName || 'プライベート資金',
+      credit ? (credit.amount?.toString() || '') : amount,
+    ]);
+  });
+  const csv = [headers, ...rows]
+    .map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))
+    .join('\r\n');
+  return '\uFEFF' + csv;
+}
+
+// ============================================
+// freee取込CSV生成（freee公式インポート形式 21列）
 // ============================================
 function buildFreeeCsv(entries: EntryWithJoin[]): string {
   const headers = [
@@ -94,25 +131,42 @@ function buildFreeeCsv(entries: EntryWithJoin[]): string {
 
   const rows: string[][] = [];
   entries.forEach(entry => {
-    const debit = getDebitLine(entry);
+    const debitLines = entry.lines?.filter(l => l.debit_credit === 'debit') || [];
     const credit = getCreditLine(entry);
-    if (!debit) return;
+    if (debitLines.length === 0) return;
 
-    const accountName = entry._debitAccountName || '';
-    const taxCatName = entry._debitTaxCatName || '';
-    const amount = debit.amount?.toString() || '0';
-    const taxAmount = debit.tax_amount?.toString() || '';
-    const isIncome = accountName.includes('売上') || accountName.includes('収入');
+    const isIncome = (entry._debitAccountName || '').includes('売上') || (entry._debitAccountName || '').includes('収入');
+    const entryDate = entry.entry_date?.replace(/-/g, '/') || '';
 
-    rows.push([
-      isIncome ? '収入' : '支出',
-      '', entry.entry_date?.replace(/-/g, '/') || '', '', '', '',
-      accountName, taxCatName, amount, '内税', taxAmount,
-      entry.description || '', '', '', '', '', '', '',
-      credit ? entry.entry_date?.replace(/-/g, '/') || '' : '',
-      credit ? '' : '',
-      credit ? (credit.amount?.toString() || '') : '',
-    ]);
+    // 複合仕訳対応: 借方が複数行の場合、1行目に決済情報、2行目以降は決済なし
+    debitLines.forEach((debit, idx) => {
+      const accountName = entry._debitAccountName || '';
+      const taxCatName = entry._debitTaxCatName || '';
+      const amount = debit.amount?.toString() || '0';
+      const taxAmount = debit.tax_amount?.toString() || '';
+
+      rows.push([
+        idx === 0 ? (isIncome ? '収入' : '支出') : '', // 収支区分（2行目以降は空）
+        '', // 管理番号
+        idx === 0 ? entryDate : '', // 発生日（2行目以降は空）
+        '', // 決済期日
+        '', // 取引先コード
+        idx === 0 ? (entry.description || '') : '', // 取引先
+        accountName,
+        taxCatName,
+        amount,
+        '内税', // 税計算区分
+        taxAmount,
+        entry.description || '', // 備考
+        '', // 品目
+        '', // 部門
+        '', // メモタグ
+        '', '', '', // セグメント1-3
+        idx === 0 && credit ? entryDate : '', // 決済日
+        idx === 0 && credit ? '' : '', // 決済口座
+        idx === 0 && credit ? (credit.amount?.toString() || '') : '', // 決済金額
+      ]);
+    });
   });
 
   const csv = [headers, ...rows]
@@ -283,7 +337,18 @@ export default function ExportPage() {
     return { total: filteredByPeriod.length, active: active.length, excluded: excluded.length, totalAmount: total };
   }, [filteredByPeriod]);
 
-  const handleCsvDownload = () => {
+  const handleSimpleCsvDownload = () => {
+    if (draftCount > 0) {
+      const ok = window.confirm(`未承認の仕訳が${draftCount}件あり、出力対象から除外されています。\nこのままCSVをダウンロードしますか？`);
+      if (!ok) return;
+    }
+    const csv = buildSimpleCsv(filteredEntries);
+    const name = currentWorkflow?.clientName ?? clientId;
+    const dateStr = new Date().toISOString().slice(0, 10);
+    downloadCsv(csv, `仕訳データ_${name}_${dateStr}.csv`);
+  };
+
+  const handleFreeeCsvDownload = () => {
     if (draftCount > 0) {
       const ok = window.confirm(`未承認の仕訳が${draftCount}件あり、出力対象から除外されています。\nこのままCSVをダウンロードしますか？`);
       if (!ok) return;
@@ -325,7 +390,7 @@ export default function ExportPage() {
         <div className="max-w-6xl mx-auto space-y-6">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">仕訳出力</h1>
-            <p className="text-sm text-gray-500 mt-1">{currentWorkflow?.clientName ?? clientId} — freee取込用CSVをダウンロードできます</p>
+            <p className="text-sm text-gray-500 mt-1">{currentWorkflow?.clientName ?? clientId} — 仕訳データCSVまたはfreee取込用CSVをダウンロードできます</p>
           </div>
 
           {/* タブ */}
@@ -420,9 +485,19 @@ export default function ExportPage() {
                         </button>
                       ))}
                     </div>
-                    <button onClick={handleCsvDownload} disabled={filteredEntries.length === 0}
+                    <button onClick={handleSimpleCsvDownload} disabled={filteredEntries.length === 0}
+                      className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed">
+                      <Download size={16} />CSV ダウンロード
+                    </button>
+                    <button onClick={handleFreeeCsvDownload} disabled={filteredEntries.length === 0}
                       className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed">
-                      <Download size={16} />freee CSV ダウンロード
+                      <Download size={16} />freee取込CSV
+                    </button>
+                    <button disabled
+                      className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-400 rounded-lg text-sm font-medium cursor-not-allowed border border-gray-200"
+                      title="freee API連携は準備中です">
+                      <FileText size={16} />freee API連携
+                      <span className="text-[10px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">準備中</span>
                     </button>
                   </div>
                 </div>

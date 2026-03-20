@@ -316,15 +316,12 @@ export default function SettingsPage() {
                 filteredUsers.map((user) => {
                   const isAdmin = user.role === 'admin';
                   return (
-                    <tr key={user.id} className="hover:bg-gray-50 transition-colors">
+                    <tr key={user.id} className={`hover:bg-gray-50 transition-colors ${
+                      user.role === 'admin' ? 'bg-red-50/30' : user.role === 'accountant' ? 'bg-blue-50/30' : ''
+                    }`}>
                       {/* 名前 */}
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 bg-blue-100 rounded-full flex items-center justify-center flex-shrink-0">
-                            <UserIcon size={18} className="text-blue-600" />
-                          </div>
-                          <span className="font-medium text-gray-900">{user.name}</span>
-                        </div>
+                        <span className="font-medium text-gray-900">{user.name}</span>
                       </td>
 
                       {/* メールアドレス */}
@@ -387,21 +384,37 @@ export default function SettingsPage() {
 
       {/* 権限説明 */}
       <div className="card bg-blue-50 border-blue-200">
-        <h3 className="text-sm font-medium text-blue-900 mb-3">💡 権限の説明</h3>
-        <div className="space-y-2">
-          {[
-            { icon: <Shield size={18} className="text-red-600 mt-0.5" />, title: '管理者', desc: 'すべての機能にアクセスでき、ユーザー管理も可能です。削除不可。' },
-            { icon: <UserCog size={18} className="text-blue-600 mt-0.5" />, title: '税理士', desc: '顧客管理、仕訳処理、マスタ管理などの主要機能にアクセスできます。' },
-            { icon: <UserIcon size={18} className="text-gray-600 mt-0.5" />, title: '担当者', desc: '証憑アップロードと仕訳確認など、限定的な機能にアクセスできます。' },
-          ].map((item) => (
-            <div key={item.title} className="flex items-start gap-3">
-              {item.icon}
-              <div>
-                <p className="text-sm font-medium text-gray-900">{item.title}</p>
-                <p className="text-xs text-gray-600">{item.desc}</p>
-              </div>
-            </div>
-          ))}
+        <h3 className="text-sm font-medium text-blue-900 mb-3">権限の説明</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-blue-200">
+                <th className="text-left py-2 pr-3 font-semibold text-blue-800">機能</th>
+                <th className="text-center py-2 px-3 font-semibold text-red-700">管理者</th>
+                <th className="text-center py-2 px-3 font-semibold text-blue-700">税理士</th>
+                <th className="text-center py-2 px-3 font-semibold text-gray-600">担当者</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-blue-100">
+              {[
+                { fn: 'ユーザー管理', admin: true, accountant: false, staff: false },
+                { fn: '顧客管理', admin: true, accountant: true, staff: false },
+                { fn: 'マスタ管理（勘定科目・ルール等）', admin: true, accountant: true, staff: false },
+                { fn: '証憑アップロード', admin: true, accountant: true, staff: true },
+                { fn: 'OCR処理', admin: true, accountant: true, staff: true },
+                { fn: '仕訳確認・承認', admin: true, accountant: true, staff: false },
+                { fn: '仕訳出力', admin: true, accountant: true, staff: false },
+                { fn: '集計・レポート', admin: true, accountant: true, staff: false },
+              ].map(row => (
+                <tr key={row.fn}>
+                  <td className="py-1.5 pr-3 text-gray-700">{row.fn}</td>
+                  <td className="py-1.5 px-3 text-center">{row.admin ? '○' : '—'}</td>
+                  <td className="py-1.5 px-3 text-center">{row.accountant ? '○' : '—'}</td>
+                  <td className="py-1.5 px-3 text-center">{row.staff ? '○' : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
 

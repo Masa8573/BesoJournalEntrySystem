@@ -203,15 +203,21 @@ export default function IndustriesPage() {
     const indent = node.level * 24;
 
     const levelColors = [
-      'font-bold text-gray-900',  // Level 0 (業界)
-      'font-medium text-gray-800', // Level 1 (業種)
-      'text-gray-600',             // Level 2 (ジャンル)
+      'font-bold text-gray-900',   // Level 0 (業界)
+      'font-semibold text-gray-800', // Level 1 (業種)
+      'text-gray-600',              // Level 2 (ジャンル)
     ];
 
     const levelBg = [
-      'bg-gray-50', // Level 0
-      '',           // Level 1
-      '',           // Level 2
+      'bg-slate-100 border-l-4 border-l-indigo-500',   // Level 0 (業界) — 濃いグレー+紫ボーダー
+      'bg-blue-50/50 border-l-4 border-l-blue-300',    // Level 1 (業種) — 薄い青+青ボーダー
+      'bg-white border-l-4 border-l-gray-200',          // Level 2 (ジャンル) — 白+グレーボーダー
+    ];
+
+    const levelBadge = [
+      { label: '業界', cls: 'bg-indigo-100 text-indigo-700' },
+      { label: '業種', cls: 'bg-blue-100 text-blue-600' },
+      { label: 'ジャンル', cls: 'bg-gray-100 text-gray-500' },
     ];
 
     return (
@@ -226,6 +232,9 @@ export default function IndustriesPage() {
               ) : (
                 <span className="w-5" />
               )}
+              <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${levelBadge[node.level]?.cls || ''}`}>
+                {levelBadge[node.level]?.label}
+              </span>
               <span className={`text-sm ${levelColors[node.level] || 'text-gray-600'}`}>{node.name}</span>
             </div>
           </td>
@@ -320,7 +329,7 @@ export default function IndustriesPage() {
         <table className="w-full">
           <thead className="bg-gray-50 border-b border-gray-200">
             <tr>
-              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">名称</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">階層 / 名称</th>
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase" style={{ width: 120 }}>コード</th>
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">説明</th>
               <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase" style={{ width: 80 }}>顧客数</th>

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Edit, Trash2, Search, ChevronDown, ChevronUp } from 'lucide-react';
+import { Plus, Edit, Trash2, Search } from 'lucide-react';
 import type { AccountItem, AccountCategory, TaxCategory } from '@/types';
 import Modal from '@/client/components/ui/Modal';
 import { supabase } from '@/client/lib/supabase';
@@ -375,10 +375,12 @@ export default function AccountsPage() {
               <tr>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">コード</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">科目名</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">よみがな</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">区分</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">税区分</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">収入相手方</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">支出相手方</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">ショートカット</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase whitespace-nowrap">知識ベース</th>
                 <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">状態</th>
                 <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">操作</th>
               </tr>
@@ -386,33 +388,24 @@ export default function AccountsPage() {
             <tbody className="bg-white divide-y divide-gray-200">
               {filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-6 py-8 text-center text-gray-500">
+                  <td colSpan={10} className="px-6 py-8 text-center text-gray-500">
                     {accountItems.length === 0
                       ? '勘定科目が登録されていません。「新規勘定科目」から追加してください。'
                       : '検索条件に一致する勘定科目が見つかりませんでした'}
                   </td>
                 </tr>
               ) : (
-                filteredItems.map((item) => (
+                filteredItems.map((item) => {
+                  const contraAccount = item.default_contra_account_id
+                    ? accountItems.find(a => a.id === item.default_contra_account_id)
+                    : null;
+                  return (
                   <tr key={item.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3 text-sm font-mono text-gray-600">{item.code}</td>
                     <td className="px-4 py-3">
-                      <div>
-                        <span className="text-sm font-medium text-gray-900">{item.name}</span>
-                        {item.description && (
-                          <button
-                            onClick={() => setExpandedDescription(expandedDescription === item.id ? null : item.id)}
-                            className="ml-2 text-gray-400 hover:text-gray-600"
-                          >
-                            {expandedDescription === item.id ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                          </button>
-                        )}
-                      </div>
-                      {expandedDescription === item.id && item.description && (
-                        <p className="text-xs text-gray-500 mt-1">{item.description}</p>
-                      )}
+                      <div className="text-sm font-medium text-gray-900">{item.name}</div>
+                      {item.name_kana && <div className="text-[10px] text-gray-400">{item.name_kana}</div>}
                     </td>
-                    <td className="px-4 py-3 text-xs text-gray-400">{item.name_kana || '-'}</td>
                     <td className="px-4 py-3">
                       <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
                         getCategoryFilter(item) === 'income' ? 'bg-blue-100 text-blue-700' :
@@ -425,17 +418,30 @@ export default function AccountsPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-600">{getTaxCategoryName(item)}</td>
+                    <td className="px-4 py-3 text-xs text-gray-500">{contraAccount?.name || '-'}</td>
+                    <td className="px-4 py-3 text-xs text-gray-500">{contraAccount?.name || '-'}</td>
                     <td className="px-4 py-3 text-xs font-mono text-gray-500">{item.short_name || '-'}</td>
+                    <td className="px-4 py-3">
+                      {item.description ? (
+                        <button onClick={() => setExpandedDescription(expandedDescription === item.id ? null : item.id)}
+                          className="text-xs text-blue-600 hover:underline">
+                          {expandedDescription === item.id ? '閉じる' : '表示'}
+                        </button>
+                      ) : <span className="text-xs text-gray-300">-</span>}
+                      {expandedDescription === item.id && item.description && (
+                        <p className="text-xs text-gray-500 mt-1 max-w-[200px]">{item.description}</p>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-center">
                       <button
                         onClick={() => handleToggleActive(item)}
-                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium cursor-pointer ${
-                          item.is_active
-                            ? 'bg-green-100 text-green-800 hover:bg-green-200'
-                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                          item.is_active ? 'bg-green-500' : 'bg-gray-300'
                         }`}
                       >
-                        {item.is_active ? '有効' : '無効'}
+                        <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
+                          item.is_active ? 'translate-x-4.5' : 'translate-x-0.5'
+                        }`} />
                       </button>
                     </td>
                     <td className="px-4 py-3 text-right">
@@ -457,7 +463,8 @@ export default function AccountsPage() {
                       </div>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>

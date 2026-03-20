@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ChevronDown, Search, Settings, Plus, Edit, Trash2, Percent } from 'lucide-react';
+import { ChevronDown, Search, Plus, Edit, Trash2, Percent } from 'lucide-react';
 import type { TaxCategory, Client } from '@/types';
 import Modal from '@/client/components/ui/Modal';
 import { supabase } from '@/client/lib/supabase';
@@ -111,6 +111,20 @@ export default function TaxCategoriesPage() {
     } catch { alert('保存に失敗しました'); }
   };
 
+  // テーブル行から直接スイッチ切り替え（顧客選択時のみ）
+  const handleQuickToggle = async (catId: string, field: 'use_as_default' | 'use_for_income' | 'use_for_expense', value: boolean) => {
+    if (!selectedClientId) return;
+    const current = getClientSetting(catId);
+    const updated = { ...current, tax_category_id: catId, [field]: value };
+    try {
+      await (supabase as any).from('client_tax_category_settings').upsert({
+        client_id: selectedClientId, tax_category_id: catId,
+        use_as_default: updated.use_as_default, use_for_income: updated.use_for_income, use_for_expense: updated.use_for_expense,
+      }, { onConflict: 'client_id,tax_category_id' });
+      await loadClientSettings(selectedClientId);
+    } catch { alert('設定の保存に失敗しました'); }
+  };
+
   // ============================================
   // 税率 CRUD
   // ============================================
@@ -177,7 +191,7 @@ export default function TaxCategoriesPage() {
     return rate ? `${rate.name} (${(rate.rate * 100).toFixed(0)}%)` : '-';
   };
 
-  const getTypeColor = (type: string) => {
+  /*const getTypeColor = (type: string) => {
     switch (type) {
       case '課税': return 'bg-blue-100 text-blue-700';
       case '非課税': return 'bg-yellow-100 text-yellow-700';
@@ -185,7 +199,7 @@ export default function TaxCategoriesPage() {
       case '免税': return 'bg-green-100 text-green-700';
       default: return 'bg-gray-100 text-gray-700';
     }
-  };
+  };*/
   const getDirectionLabel = (cat: TaxCategory) => {
     if (cat.direction === 'その他') return '共通';
     if (cat.direction === '売上') return '収入';
@@ -284,39 +298,44 @@ export default function TaxCategoriesPage() {
               <table className="w-full">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">コード</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">税区分</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">種類</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">方向</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">適用税率</th>
-                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">デフォルト</th>
-                    {selectedClientId && (
-                      <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">詳細</th>
-                    )}
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">説明</th>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase whitespace-nowrap">デフォルト</th>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">収入</th>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">支出</th>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">詳細</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
                   {filteredCategories.map(cat => {
                     const setting = selectedClientId ? getClientSetting(cat.id) : null;
+                    const isDefault = setting ? setting.use_as_default : cat.is_default;
+                    const isIncomeCat = setting ? setting.use_for_income : isIncome(cat);
+                    const isExpenseCat = setting ? setting.use_for_expense : isExpense(cat);
                     return (
                       <tr key={cat.id} className="hover:bg-gray-50">
-                        <td className="px-4 py-3 text-xs text-gray-500 font-mono">{cat.code}</td>
-                        <td className="px-4 py-3 text-sm font-medium text-gray-900">{cat.display_name ?? cat.name}</td>
                         <td className="px-4 py-3">
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${getTypeColor(cat.type)}`}>{cat.type}</span>
+                          <div className="text-sm font-medium text-gray-900">{cat.display_name ?? cat.name}</div>
+                          <div className="text-xs text-gray-400 font-mono">{cat.code}</div>
                         </td>
-                        <td className="px-4 py-3 text-sm text-gray-600">{getDirectionLabel(cat)}</td>
-                        <td className="px-4 py-3 text-sm text-gray-600">{getRateName(cat)}</td>
+                        <td className="px-4 py-3 text-sm text-gray-500 max-w-[300px]">{cat.description || '-'}</td>
                         <td className="px-4 py-3 text-center">
-                          <Switch checked={setting ? setting.use_as_default : cat.is_default} disabled={!selectedClientId} />
+                          <Switch checked={isDefault} disabled={!selectedClientId}
+                            onChange={v => selectedClientId && handleQuickToggle(cat.id, 'use_as_default', v)} />
                         </td>
-                        {selectedClientId && (
-                          <td className="px-4 py-3 text-center">
-                            <button onClick={() => handleOpenDetail(cat)} className="p-1.5 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded">
-                              <Settings size={16} />
-                            </button>
-                          </td>
-                        )}
+                        <td className="px-4 py-3 text-center">
+                          <Switch checked={isIncomeCat} disabled={!selectedClientId}
+                            onChange={v => selectedClientId && handleQuickToggle(cat.id, 'use_for_income', v)} />
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <Switch checked={isExpenseCat} disabled={!selectedClientId}
+                            onChange={v => selectedClientId && handleQuickToggle(cat.id, 'use_for_expense', v)} />
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <button onClick={() => handleOpenDetail(cat)} className="p-1.5 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded text-xs">
+                            詳細
+                          </button>
+                        </td>
                       </tr>
                     );
                   })}

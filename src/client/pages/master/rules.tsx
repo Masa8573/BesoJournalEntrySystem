@@ -239,6 +239,33 @@ export default function RulesPage() {
   const industryCount = rules.filter(r => r.scope === 'industry').length;
   const clientCount = rules.filter(r => r.scope === 'client').length;
 
+  // U1: 全ルール一括重複チェック
+  const [duplicates, setDuplicates] = useState<Array<{ rule1: Rule; rule2: Rule }>>([]);
+  const [showDuplicates, setShowDuplicates] = useState(false);
+
+  const handleCheckAllDuplicates = () => {
+    const dups: Array<{ rule1: Rule; rule2: Rule }> = [];
+    const activeRules = rules.filter(r => r.is_active);
+    for (let i = 0; i < activeRules.length; i++) {
+      for (let j = i + 1; j < activeRules.length; j++) {
+        const a = activeRules[i];
+        const b = activeRules[j];
+        // 同じ取引先パターン AND 同じ勘定科目
+        const sameSupplier = a.conditions?.supplier_pattern && b.conditions?.supplier_pattern &&
+          a.conditions.supplier_pattern.toLowerCase() === b.conditions.supplier_pattern.toLowerCase();
+        const sameAccount = a.actions?.account_item_id && b.actions?.account_item_id &&
+          a.actions.account_item_id === b.actions.account_item_id;
+        // 同じ取引先パターン（勘定科目違い）も警告
+        if (sameSupplier) {
+          dups.push({ rule1: a, rule2: b });
+        }
+      }
+    }
+    setDuplicates(dups);
+    setShowDuplicates(true);
+    if (dups.length === 0) alert('重複ルールは見つかりませんでした');
+  };
+
   // ============================================
   // レンダリング
   // ============================================
@@ -262,9 +289,14 @@ export default function RulesPage() {
           <h1 className="text-2xl font-bold text-gray-900">仕訳ルール管理</h1>
           <p className="text-sm text-gray-500 mt-1">仕訳自動生成のルールを管理します。優先度が低い（数字が小さい）ほど優先的に適用されます。</p>
         </div>
-        <button onClick={handleOpenNewModal} className="flex items-center gap-2 btn-primary">
-          <Plus size={18} /> 新規ルール作成
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={handleCheckAllDuplicates} className="flex items-center gap-2 px-3 py-2 border border-orange-300 text-orange-700 rounded-lg text-sm font-medium hover:bg-orange-50">
+            ⚠ 重複チェック
+          </button>
+          <button onClick={handleOpenNewModal} className="flex items-center gap-2 btn-primary">
+            <Plus size={18} /> 新規ルール作成
+          </button>
+        </div>
       </div>
 
       {/* サマリー */}
@@ -282,6 +314,26 @@ export default function RulesPage() {
           </button>
         ))}
       </div>
+
+      {/* U1: 重複チェック結果 */}
+      {showDuplicates && duplicates.length > 0 && (
+        <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-semibold text-orange-800">⚠ 重複の可能性があるルール（{duplicates.length}組）</h3>
+            <button onClick={() => setShowDuplicates(false)} className="text-xs text-orange-600 hover:underline">閉じる</button>
+          </div>
+          <div className="space-y-2">
+            {duplicates.map((d, i) => (
+              <div key={i} className="bg-white rounded p-2 text-xs text-gray-700 border border-orange-100">
+                <span className="font-medium">#{d.rule1.priority} {d.rule1.rule_name}</span>
+                <span className="mx-2 text-orange-400">↔</span>
+                <span className="font-medium">#{d.rule2.priority} {d.rule2.rule_name}</span>
+                <span className="ml-2 text-gray-400">（パターン: {d.rule1.conditions?.supplier_pattern}）</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ツールバー: タブ + 検索 */}
       <div className="flex items-center justify-between gap-3">
@@ -318,14 +370,14 @@ export default function RulesPage() {
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
                 <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase" style={{ width: 70 }}>優先度</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase" style={{ width: 80 }}>種別</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase whitespace-nowrap" style={{ width: 90 }}>種別</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">適用範囲</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">取引先パターン</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">金額範囲</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">勘定科目</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">税区分</th>
                 <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase">按分</th>
-                <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase" style={{ width: 70 }}>状態</th>
+                <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase whitespace-nowrap" style={{ width: 80 }}>状態</th>
                 <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase" style={{ width: 80 }}>操作</th>
               </tr>
             </thead>
@@ -345,8 +397,8 @@ export default function RulesPage() {
                       <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-gray-100 text-sm font-bold text-gray-700">{rule.priority}</span>
                     </td>
                     <td className="px-4 py-3">
-                      <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold ${rule.rule_type === '支出' ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
-                        ⊕ {rule.rule_type}
+                      <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold whitespace-nowrap ${rule.rule_type === '支出' ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
+                        {rule.rule_type === '支出' ? '↓' : '↑'} {rule.rule_type}
                       </span>
                     </td>
                     <td className="px-4 py-3">
@@ -366,9 +418,9 @@ export default function RulesPage() {
                     <td className="px-4 py-3 text-center">
                       <button onClick={() => handleToggleActive(rule)}>
                         {rule.is_active ? (
-                          <span className="inline-flex px-2.5 py-0.5 rounded-md text-xs font-semibold bg-green-50 text-green-600 border border-green-200">有効</span>
+                          <span className="inline-flex px-2.5 py-0.5 rounded-md text-xs font-semibold bg-green-50 text-green-600 border border-green-200 whitespace-nowrap">有効</span>
                         ) : (
-                          <span className="inline-flex px-2.5 py-0.5 rounded-md text-xs font-semibold bg-gray-50 text-gray-400 border border-gray-200">無効</span>
+                          <span className="inline-flex px-2.5 py-0.5 rounded-md text-xs font-semibold bg-gray-50 text-gray-400 border border-gray-200 whitespace-nowrap">無効</span>
                         )}
                       </button>
                     </td>

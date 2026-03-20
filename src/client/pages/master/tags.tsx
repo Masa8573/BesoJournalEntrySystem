@@ -19,11 +19,11 @@ export default function TagsPage() {
   const [tags, setTags] = useState<Tag[]>([]);
   const [orgId, setOrgId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeFilter, setActiveFilter] = useState<'all' | 'supplier' | 'item'>('all');
+  const [activeFilter, setActiveFilter] = useState<'all' | 'document' | 'journal_entry' | 'general'>('all');
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingTag, setEditingTag] = useState<Tag | null>(null);
-  const [formData, setFormData] = useState({ name: '', tag_type: 'supplier' as 'supplier' | 'item', color: '#EF4444' });
+  const [formData, setFormData] = useState({ name: '', tag_type: 'general' as 'document' | 'journal_entry' | 'general', color: '#EF4444' });
 
   useEffect(() => { loadData(); }, []);
 
@@ -44,6 +44,7 @@ export default function TagsPage() {
       .from('tags')
       .select('*')
       .eq('is_active', true)
+      .in('tag_type', ['document', 'journal_entry', 'general'])
       .order('name');
     if (error) console.error('タグ取得エラー:', error.message);
     if (data) setTags(data as Tag[]);
@@ -52,16 +53,17 @@ export default function TagsPage() {
 
   const handleOpenNewModal = () => {
     setEditingTag(null);
-    setFormData({ name: '', tag_type: 'supplier', color: '#EF4444' });
+    setFormData({ name: '', tag_type: 'general', color: '#EF4444' });
     setShowModal(true);
   };
 
   const handleOpenEditModal = (tag: Tag) => {
     setEditingTag(tag);
+    const validTypes = ['document', 'journal_entry', 'general'] as const;
+    const tagType = validTypes.includes(tag.tag_type as any) ? (tag.tag_type as 'document' | 'journal_entry' | 'general') : 'general';
     setFormData({
       name: tag.name,
-      // DBの tag_type は広い型なので、フォーム用に絞り込む
-      tag_type: (tag.tag_type === 'item' ? 'item' : 'supplier') as 'supplier' | 'item',
+      tag_type: tagType,
       color: tag.color || '#EF4444',
     });
     setShowModal(true);
@@ -93,7 +95,8 @@ export default function TagsPage() {
   };
 
   const handleDelete = async (tag: Tag) => {
-    const typeName = tag.tag_type === 'supplier' ? '取引先タグ' : '品目タグ';
+    const typeNames: Record<string, string> = { document: '証憑タグ', journal_entry: '仕訳タグ', general: '汎用タグ' };
+    const typeName = typeNames[tag.tag_type] || 'タグ';
     if (!window.confirm(`${typeName}「${tag.name}」を削除しますか？`)) return;
     // 論理削除（is_active=false）
     const { error } = await supabase.from('tags').update({ is_active: false }).eq('id', tag.id);
@@ -103,13 +106,13 @@ export default function TagsPage() {
 
   const filtered = tags.filter(t => {
     const matchesSearch = t.name.toLowerCase().includes(searchQuery.toLowerCase());
-    if (activeFilter === 'supplier') return matchesSearch && t.tag_type === 'supplier';
-    if (activeFilter === 'item') return matchesSearch && t.tag_type === 'item';
-    return matchesSearch;
+    if (activeFilter === 'all') return matchesSearch;
+    return matchesSearch && t.tag_type === activeFilter;
   });
 
-  const supplierCount = tags.filter(t => t.tag_type === 'supplier').length;
-  const itemCount = tags.filter(t => t.tag_type === 'item').length;
+  const docCount = tags.filter(t => t.tag_type === 'document').length;
+  const journalCount = tags.filter(t => t.tag_type === 'journal_entry').length;
+  const generalCount = tags.filter(t => t.tag_type === 'general').length;
 
   if (loading) {
     return (
@@ -124,21 +127,25 @@ export default function TagsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">タグ管理</h1>
-          <p className="text-sm text-gray-500 mt-1">取引先タグと品目タグを管理します</p>
+          <p className="text-sm text-gray-500 mt-1">証憑タグ・仕訳タグ・汎用タグを管理します（取引先・品目は専用マスタで管理）</p>
         </div>
         <button onClick={handleOpenNewModal} className="flex items-center gap-2 btn-primary">
           <Plus size={18} />新規タグ
         </button>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-3 gap-4">
         <div className="card">
-          <div className="flex items-center gap-2 mb-2"><TagIcon size={20} className="text-blue-600" /><h3 className="text-sm font-medium text-gray-600">取引先タグ</h3></div>
-          <div className="text-3xl font-bold text-gray-900">{supplierCount}</div>
+          <div className="flex items-center gap-2 mb-2"><TagIcon size={20} className="text-orange-600" /><h3 className="text-sm font-medium text-gray-600">証憑タグ</h3></div>
+          <div className="text-3xl font-bold text-gray-900">{docCount}</div>
         </div>
         <div className="card">
-          <div className="flex items-center gap-2 mb-2"><TagIcon size={20} className="text-green-600" /><h3 className="text-sm font-medium text-gray-600">品目タグ</h3></div>
-          <div className="text-3xl font-bold text-gray-900">{itemCount}</div>
+          <div className="flex items-center gap-2 mb-2"><TagIcon size={20} className="text-blue-600" /><h3 className="text-sm font-medium text-gray-600">仕訳タグ</h3></div>
+          <div className="text-3xl font-bold text-gray-900">{journalCount}</div>
+        </div>
+        <div className="card">
+          <div className="flex items-center gap-2 mb-2"><TagIcon size={20} className="text-green-600" /><h3 className="text-sm font-medium text-gray-600">汎用タグ</h3></div>
+          <div className="text-3xl font-bold text-gray-900">{generalCount}</div>
         </div>
       </div>
 
@@ -147,10 +154,11 @@ export default function TagsPage() {
           <h2 className="text-lg font-semibold text-gray-900 mb-4">タグ一覧</h2>
           <div className="flex items-center gap-3 mb-4">
             {([
-              { key: 'all', label: `すべて (${tags.length})` },
-              { key: 'supplier', label: `取引先 (${supplierCount})` },
-              { key: 'item', label: `品目 (${itemCount})` },
-            ] as { key: 'all' | 'supplier' | 'item'; label: string }[]).map(({ key, label }) => (
+              { key: 'all' as const, label: `すべて (${tags.length})` },
+              { key: 'document' as const, label: `証憑 (${docCount})` },
+              { key: 'journal_entry' as const, label: `仕訳 (${journalCount})` },
+              { key: 'general' as const, label: `汎用 (${generalCount})` },
+            ]).map(({ key, label }) => (
               <button
                 key={key}
                 onClick={() => setActiveFilter(key)}
@@ -189,8 +197,12 @@ export default function TagsPage() {
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`badge ${tag.tag_type === 'supplier' ? 'badge-blue' : 'badge-green'}`}>
-                        {tag.tag_type === 'supplier' ? '取引先' : '品目'}
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                        tag.tag_type === 'document' ? 'bg-orange-100 text-orange-700' :
+                        tag.tag_type === 'journal_entry' ? 'bg-blue-100 text-blue-700' :
+                        'bg-green-100 text-green-700'
+                      }`}>
+                        {tag.tag_type === 'document' ? '証憑' : tag.tag_type === 'journal_entry' ? '仕訳' : '汎用'}
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -219,10 +231,14 @@ export default function TagsPage() {
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">タイプ <span className="text-red-500">*</span></label>
             <div className="flex gap-4">
-              {(['supplier', 'item'] as const).map(type => (
-                <label key={type} className="flex items-center cursor-pointer">
-                  <input type="radio" name="tag_type" value={type} checked={formData.tag_type === type} onChange={() => setFormData({ ...formData, tag_type: type })} className="mr-2" />
-                  <span className="text-sm text-gray-700">{type === 'supplier' ? '取引先タグ' : '品目タグ'}</span>
+              {([
+                { value: 'document' as const, label: '証憑タグ' },
+                { value: 'journal_entry' as const, label: '仕訳タグ' },
+                { value: 'general' as const, label: '汎用タグ' },
+              ]).map(type => (
+                <label key={type.value} className="flex items-center cursor-pointer">
+                  <input type="radio" name="tag_type" value={type.value} checked={formData.tag_type === type.value} onChange={() => setFormData({ ...formData, tag_type: type.value })} className="mr-2" />
+                  <span className="text-sm text-gray-700">{type.label}</span>
                 </label>
               ))}
             </div>
