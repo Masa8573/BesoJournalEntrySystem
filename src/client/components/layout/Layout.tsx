@@ -100,18 +100,22 @@ function Sidebar() {
 
   // 集計・チェックのパス
   const summaryPath = workflowPath('summary');
-  const excludedPath = workflowPath('excluded');
+  const excludedHistoryPath = workflowPath('excluded');
   const summaryActive = isActive(summaryPath);
-  const excludedActive = isActive(excludedPath);
+  const excludedHistoryActive = isActive(excludedHistoryPath);
 
-  // ワークフロー処理系メニュー（集計・対象外を除く）
-  // ※ AIチェックと仕訳確認を統合 → 「仕訳確認」に一本化
+  // 仕訳確認のサブ: 対象外証憑（同じreviewページに?tab=excludedで遷移）
+  const reviewPath = workflowPath('review');
+  const reviewExcludedPath = reviewPath !== '#' ? `${reviewPath}?tab=excluded` : '#';
+  const reviewActive = isActive(reviewPath);
+  const reviewExcludedActive = location.pathname + location.search === reviewExcludedPath;
+
+  // ワークフロー処理系メニュー（4ステップ）
   const workflowProcessItems = [
     { label: '証憑アップロード', icon: <Upload size={18} />,   path: workflowPath('upload') },
     { label: 'OCR処理',         icon: <Scan size={18} />,     path: workflowPath('ocr') },
-    { label: '仕訳確認',         icon: <Eye size={18} />,      path: workflowPath('review') },
-    { label: '仕訳出力',         icon: <Download size={18} />, path: workflowPath('export') },
   ];
+  // 仕訳確認と仕訳出力は個別にレンダリング（サブメニュー付きのため）
 
   return (
     <aside className="w-64 bg-gray-50 border-r border-gray-200 h-screen overflow-y-auto flex-shrink-0">
@@ -182,30 +186,30 @@ function Sidebar() {
                   );
                 })()}
 
-                {/* ②-a 対象外証憑（集計の子要素） */}
+                {/* ②-a 対象外履歴（集計の子要素）*/}
                 {(() => {
-                  const disabled = excludedPath === '#';
+                  const disabled = excludedHistoryPath === '#';
                   return (
                     <Link
-                      to={excludedPath}
+                      to={excludedHistoryPath}
                       onClick={(e) => { if (disabled) e.preventDefault(); }}
                       className={`flex items-center gap-2 px-3 py-1.5 ml-6 text-sm rounded-md transition-colors ${
                         disabled
                           ? 'text-gray-400 cursor-not-allowed'
-                          : excludedActive
+                          : excludedHistoryActive
                             ? 'bg-blue-50 text-blue-700 font-medium'
                             : 'text-gray-600 hover:bg-gray-100'
                       }`}
                     >
-                      <span className={excludedActive ? 'text-blue-600' : 'text-gray-400'}>
+                      <span className={excludedHistoryActive ? 'text-blue-600' : 'text-gray-400'}>
                         <FileX size={16} />
                       </span>
-                      <span className="text-xs">対象外証憑</span>
+                      <span className="text-xs">対象外履歴</span>
                     </Link>
                   );
                 })()}
 
-                {/* ③〜⑦ ワークフロー処理系 */}
+                {/* ③④ 証憑アップロード / OCR処理 */}
                 {workflowProcessItems.map((item) => {
                   const active = isActive(item.path);
                   const disabled = item.path === '#';
@@ -229,6 +233,73 @@ function Sidebar() {
                     </Link>
                   );
                 })}
+
+                {/* ⑤ 仕訳確認（サブ: 対象外証憑） */}
+                {(() => {
+                  const disabled = reviewPath === '#';
+                  return (
+                    <>
+                      <Link
+                        to={reviewPath}
+                        onClick={(e) => { if (disabled) e.preventDefault(); }}
+                        className={`flex items-center gap-2 px-3 py-1.5 ml-2 text-sm rounded-md transition-colors ${
+                          disabled
+                            ? 'text-gray-400 cursor-not-allowed'
+                            : reviewActive && !reviewExcludedActive
+                              ? 'bg-blue-50 text-blue-700 font-medium'
+                              : 'text-gray-600 hover:bg-gray-100'
+                        }`}
+                      >
+                        <span className={reviewActive ? 'text-blue-600' : 'text-gray-400'}>
+                          <Eye size={18} />
+                        </span>
+                        <span>仕訳確認</span>
+                      </Link>
+                      {/* 対象外証憑（仕訳確認のサブ）*/}
+                      <Link
+                        to={reviewExcludedPath}
+                        onClick={(e) => { if (disabled) e.preventDefault(); }}
+                        className={`flex items-center gap-2 px-3 py-1.5 ml-6 text-sm rounded-md transition-colors ${
+                          disabled
+                            ? 'text-gray-400 cursor-not-allowed'
+                            : reviewExcludedActive
+                              ? 'bg-blue-50 text-blue-700 font-medium'
+                              : 'text-gray-600 hover:bg-gray-100'
+                        }`}
+                      >
+                        <span className={reviewExcludedActive ? 'text-blue-600' : 'text-gray-400'}>
+                          <FileX size={16} />
+                        </span>
+                        <span className="text-xs">対象外証憑</span>
+                      </Link>
+                    </>
+                  );
+                })()}
+
+                {/* ⑥ 仕訳出力 */}
+                {(() => {
+                  const exportPath = workflowPath('export');
+                  const disabled = exportPath === '#';
+                  const active = isActive(exportPath);
+                  return (
+                    <Link
+                      to={exportPath}
+                      onClick={(e) => { if (disabled) e.preventDefault(); }}
+                      className={`flex items-center gap-2 px-3 py-1.5 ml-2 text-sm rounded-md transition-colors ${
+                        disabled
+                          ? 'text-gray-400 cursor-not-allowed'
+                          : active
+                            ? 'bg-blue-50 text-blue-700 font-medium'
+                            : 'text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      <span className={active ? 'text-blue-600' : 'text-gray-400'}>
+                        <Download size={18} />
+                      </span>
+                      <span>仕訳出力</span>
+                    </Link>
+                  );
+                })()}
               </div>
             </div>
           )}

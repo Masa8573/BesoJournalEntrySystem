@@ -120,6 +120,7 @@ export interface TaxCategory {
   display_name: string | null;
   type: string;       // '課税' | '非課税' | '不課税' | '免税'
   direction: string;  // '売上' | '仕入' | 'その他'
+  current_tax_rate_id: string | null;
   is_default: boolean;
   is_active: boolean;
   sort_order: number;
@@ -163,11 +164,12 @@ export interface Rule {
     amount_max?: number | null;
   };
 
-  // アクション: { account_item_id?, tax_category_id?, description_template? }
+  // アクション: { account_item_id?, tax_category_id?, description_template?, business_ratio? }
   actions: {
     account_item_id?: string | null;
     tax_category_id?: string | null;
     description_template?: string | null;
+    business_ratio?: number | null;
   };
 
   is_active: boolean;

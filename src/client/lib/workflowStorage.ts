@@ -9,7 +9,7 @@ export interface WorkflowState {
   id: string;
   clientId: string;
   clientName: string;
-  currentStep: number; // 1-6
+  currentStep: number; // 1-4
   completedSteps: number[];
   data: {
     documents?: string[];      // アップロードしたドキュメントID
@@ -189,8 +189,6 @@ export function getStepName(step: number): string {
     'OCR処理',
     '仕訳確認',
     '仕訳出力',
-    '集計・チェック',
-    '対象外証憑',
   ];
   return stepNames[step - 1] || '不明';
 }
@@ -209,8 +207,6 @@ export function getStepPath(step: number, clientId?: string): string {
     2: 'ocr',
     3: 'review',
     4: 'export',
-    5: 'summary',
-    6: 'excluded',
   };
 
   const slug = stepSlugs[step];

@@ -106,7 +106,7 @@ export function WorkflowProvider({ children }: WorkflowProviderProps) {
   // ============================================
   const goToNextStep = useCallback(async () => {
     if (!currentWorkflow) return;
-    if (currentWorkflow.currentStep >= 6) return;
+    if (currentWorkflow.currentStep >= 4) return;
 
     const nextStep = currentWorkflow.currentStep + 1;
     const completedSteps = currentWorkflow.completedSteps.includes(currentWorkflow.currentStep)
@@ -145,7 +145,7 @@ export function WorkflowProvider({ children }: WorkflowProviderProps) {
   // ============================================
   const goToStep = useCallback(async (step: number) => {
     if (!currentWorkflow) return;
-    if (step < 1 || step > 6) return;
+    if (step < 1 || step > 4) return;
 
     const updated = await workflowsApi.update(currentWorkflow.id, { currentStep: step });
 
@@ -204,7 +204,7 @@ export function WorkflowProvider({ children }: WorkflowProviderProps) {
   // ============================================
   const canGoToNextStep = useCallback((): boolean => {
     if (!currentWorkflow) return false;
-    return currentWorkflow.currentStep < 6;
+    return currentWorkflow.currentStep < 4;
   }, [currentWorkflow]);
 
   // ============================================

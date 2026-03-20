@@ -15,8 +15,8 @@ export interface WorkflowHeaderProps {
 // ============================================
 // ステップ定義
 // ============================================
-const TOTAL_STEPS = 6;
-const STEPS = [1, 2, 3, 4, 5, 6] as const;
+const TOTAL_STEPS = 4;
+const STEPS = [1, 2, 3, 4] as const;
 
 // ============================================
 // WorkflowHeader（進捗バー + ナビゲーション統合）
