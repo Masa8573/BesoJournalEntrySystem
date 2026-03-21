@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ChevronDown, Search, Plus, Edit, Trash2, Percent } from 'lucide-react';
+import { ChevronDown, Search, Settings, Plus, Edit, Trash2, Percent } from 'lucide-react';
 import type { TaxCategory, Client } from '@/types';
 import Modal from '@/client/components/ui/Modal';
 import { supabase } from '@/client/lib/supabase';
@@ -48,8 +48,8 @@ export default function TaxCategoriesPage() {
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState<string>('staff');
 
-  //const canEditTaxCat = userRole === 'admin'; // 税区分はadminのみ
-  //const canEditSettings = userRole === 'admin' || userRole === 'accountant'; // 顧客別設定はaccountantも可
+  const canEditTaxCat = userRole === 'admin'; // 税区分はadminのみ
+  const canEditSettings = userRole === 'admin' || userRole === 'accountant'; // 顧客別設定はaccountantも可
 
   // 税区分詳細モーダル
   const [showDetailModal, setShowDetailModal] = useState(false);
@@ -200,7 +200,7 @@ export default function TaxCategoriesPage() {
     return rate ? `${rate.name} (${(rate.rate * 100).toFixed(0)}%)` : '-';
   };
 
-  /*const getTypeColor = (type: string) => {
+  const getTypeColor = (type: string) => {
     switch (type) {
       case '課税': return 'bg-blue-100 text-blue-700';
       case '非課税': return 'bg-yellow-100 text-yellow-700';
@@ -208,7 +208,7 @@ export default function TaxCategoriesPage() {
       case '免税': return 'bg-green-100 text-green-700';
       default: return 'bg-gray-100 text-gray-700';
     }
-  };*/
+  };
   const getDirectionLabel = (cat: TaxCategory) => {
     if (cat.direction === 'その他') return '共通';
     if (cat.direction === '売上') return '収入';
@@ -329,15 +329,15 @@ export default function TaxCategoriesPage() {
                         </td>
                         <td className="px-4 py-3 text-sm text-gray-500 max-w-[300px]">{cat.description || '-'}</td>
                         <td className="px-4 py-3 text-center">
-                          <Switch checked={isDefault} disabled={!selectedClientId}
+                          <Switch checked={isDefault} disabled={!selectedClientId || !canEditSettings}
                             onChange={v => selectedClientId && handleQuickToggle(cat.id, 'use_as_default', v)} />
                         </td>
                         <td className="px-4 py-3 text-center">
-                          <Switch checked={isIncomeCat} disabled={!selectedClientId}
+                          <Switch checked={isIncomeCat} disabled={!selectedClientId || !canEditSettings}
                             onChange={v => selectedClientId && handleQuickToggle(cat.id, 'use_for_income', v)} />
                         </td>
                         <td className="px-4 py-3 text-center">
-                          <Switch checked={isExpenseCat} disabled={!selectedClientId}
+                          <Switch checked={isExpenseCat} disabled={!selectedClientId || !canEditSettings}
                             onChange={v => selectedClientId && handleQuickToggle(cat.id, 'use_for_expense', v)} />
                         </td>
                         <td className="px-4 py-3 text-center">
@@ -366,7 +366,8 @@ export default function TaxCategoriesPage() {
               <h2 className="text-lg font-semibold text-gray-900">適用税率マスタ</h2>
               <p className="text-sm text-gray-500 mt-1">税区分に紐づく税率を管理します。仕訳確認画面の税率選択に反映されます。</p>
             </div>
-            <button onClick={handleOpenNewRate} className="flex items-center gap-2 btn-primary">
+            <button onClick={handleOpenNewRate} disabled={!canEditTaxCat}
+              className={`flex items-center gap-2 btn-primary ${!canEditTaxCat ? 'opacity-40 cursor-not-allowed' : ''}`}>
               <Plus size={18} /> 税率を追加
             </button>
           </div>
@@ -411,7 +412,8 @@ export default function TaxCategoriesPage() {
                           <button onClick={() => handleOpenEditRate(rate)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded" title="編集">
                             <Edit size={16} />
                           </button>
-                          <button onClick={() => handleDeleteRate(rate)} className="p-1.5 text-red-600 hover:bg-red-50 rounded" title="削除">
+                          <button onClick={() => canEditTaxCat && handleDeleteRate(rate)} disabled={!canEditTaxCat}
+                            className={`p-1.5 rounded ${canEditTaxCat ? 'text-red-600 hover:bg-red-50' : 'text-gray-300 cursor-not-allowed'}`} title="削除">
                             <Trash2 size={16} />
                           </button>
                         </div>
@@ -469,14 +471,14 @@ export default function TaxCategoriesPage() {
                     <p className="text-sm font-medium text-gray-700">{label}</p>
                     <p className="text-xs text-gray-500 mt-0.5">{desc}</p>
                   </div>
-                  <Switch checked={editSettings[key]} onChange={v => setEditSettings({ ...editSettings, [key]: v })} disabled={!selectedClientId} />
+                  <Switch checked={editSettings[key]} onChange={v => setEditSettings({ ...editSettings, [key]: v })} disabled={!selectedClientId || !canEditSettings} />
                 </div>
               ))}
             </div>
 
             <div className="flex justify-end gap-3 pt-4 border-t">
               <button type="button" onClick={() => setShowDetailModal(false)} className="px-4 py-2 text-sm text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50">キャンセル</button>
-              <button type="button" onClick={handleSaveSettings} disabled={!selectedClientId} className="btn-primary disabled:opacity-50">保存する</button>
+              <button type="button" onClick={handleSaveSettings} disabled={!selectedClientId || !canEditSettings} className="btn-primary disabled:opacity-50">保存する</button>
             </div>
           </div>
         )}

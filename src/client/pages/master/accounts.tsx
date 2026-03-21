@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Edit, Trash2, Search, ChevronDown, ChevronUp } from 'lucide-react';
+import { Plus, Edit, Trash2, Search } from 'lucide-react';
 import type { AccountItem, AccountCategory, TaxCategory } from '@/types';
 import Modal from '@/client/components/ui/Modal';
 import { supabase } from '@/client/lib/supabase';
