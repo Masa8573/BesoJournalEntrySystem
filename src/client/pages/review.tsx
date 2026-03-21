@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   ZoomOut, ZoomIn, RotateCcw, ChevronLeft, ChevronRight,
-  ChevronDown, Ban, AlertCircle, Loader, CheckCircle, List, Eye, Search, Undo2,
+  ChevronDown, Ban, AlertCircle, Loader, CheckCircle, Save,
+  ShieldCheck, List, Eye, Search, Undo2,
 } from 'lucide-react';
 import { useWorkflow } from '@/client/context/WorkflowContext';
 import { useSearchParams } from 'react-router-dom';
@@ -629,11 +630,11 @@ export default function ReviewPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleKeyDown]);
 
-  /*const groupedTaxCategories = useMemo(() => {
+  const groupedTaxCategories = useMemo(() => {
     const g: Record<string, TaxCategory[]> = {};
     taxCategories.forEach(tc => { const k = tc.direction || 'その他'; if (!g[k]) g[k] = []; g[k].push(tc); });
     return g;
-  }, [taxCategories]);*/
+  }, [taxCategories]);
 
   // ワークフロー次へ（仕訳出力に進む前に全件確定）
   const handleBeforeNext = async (): Promise<boolean> => {
@@ -684,9 +685,9 @@ export default function ReviewPage() {
     </div>
   );
   if (loading) return (
-    <div className="flex flex-col">
+    <div className="flex flex-col -m-6">
       <WorkflowHeader onBeforeNext={handleBeforeNext} nextLabel="仕訳出力へ" />
-      <div className="flex-1 flex items-center justify-center">
+      <div className="flex-1 flex items-center justify-center p-6">
         <Loader size={32} className="animate-spin text-blue-500" /><span className="ml-3 text-gray-500">読み込み中...</span>
       </div>
     </div>
@@ -696,7 +697,7 @@ export default function ReviewPage() {
   // レンダリング
   // ============================================
   return (
-    <div className="flex flex-col bg-gray-50">
+    <div className="flex flex-col bg-gray-50 -m-6">
       <WorkflowHeader onBeforeNext={handleBeforeNext} nextLabel="仕訳出力へ" />
 
       {/* タブ */}
@@ -856,19 +857,26 @@ export default function ReviewPage() {
                       <div className="text-xs text-gray-400 truncate max-w-[200px]">{ci.fileName}</div>
                     </div>
                     <div className="flex items-center gap-0.5 border border-gray-200 rounded-md p-0.5">
-                      <button onClick={() => setZoom(z => Math.max(50, z - 25))} className="p-1.5 hover:bg-gray-100 rounded text-gray-600"><ZoomOut size={14} /></button>
-                      <span className="text-xs px-1.5 text-gray-500">{zoom}%</span>
-                      <button onClick={() => setZoom(z => Math.min(200, z + 25))} className="p-1.5 hover:bg-gray-100 rounded text-gray-600"><ZoomIn size={14} /></button>
+                      <button onClick={() => setZoom(z => Math.max(25, z - 25))} className="p-1.5 hover:bg-gray-100 rounded text-gray-600"><ZoomOut size={14} /></button>
+                      <button onClick={() => setZoom(100)} className="px-1.5 py-1 hover:bg-gray-100 rounded text-xs text-gray-500 font-mono" title="フィット">{zoom}%</button>
+                      <button onClick={() => setZoom(z => Math.min(300, z + 25))} className="p-1.5 hover:bg-gray-100 rounded text-gray-600"><ZoomIn size={14} /></button>
                       <div className="w-px h-3.5 bg-gray-200 mx-0.5" />
                       <button onClick={() => setRotation(r => (r + 90) % 360)} className="p-1.5 hover:bg-gray-100 rounded text-gray-600" title="90度回転"><RotateCcw size={14} /></button>
                     </div>
                   </div>
-                  <div className="flex-1 overflow-auto bg-slate-100 flex items-start justify-center p-4" style={{ minHeight: 400 }}>
+                  <div className="flex-1 overflow-auto bg-slate-100 flex items-start justify-center p-2" style={{ minHeight: 500 }}>
                     {ci.imageUrl ? (
                       ci.fileName?.toLowerCase().endsWith('.pdf') ? (
-                        <div style={{ width: `${zoom}%`, transform: `rotate(${rotation}deg)`, transition: 'transform .3s', transformOrigin: 'center center' }}>
-                          <iframe src={`${ci.imageUrl}#toolbar=0`} className="w-full border-0 rounded shadow-sm" style={{ height: 600 }} title={ci.fileName} />
-                        </div>
+                        <iframe src={`${ci.imageUrl}#toolbar=0&view=FitH`}
+                          className="border-0 rounded shadow-sm"
+                          style={{
+                            width: `${Math.max(zoom, 100)}%`,
+                            height: 'calc(100vh - 260px)',
+                            minHeight: 600,
+                            transform: `rotate(${rotation}deg)`,
+                            transition: 'transform .3s',
+                            transformOrigin: 'center center',
+                          }} title={ci.fileName} />
                       ) : (
                         <img src={ci.imageUrl} alt={ci.fileName}
                           style={{ width: `${zoom}%`, maxWidth: 'none', transform: `rotate(${rotation}deg)`, transition: 'transform .3s', transformOrigin: 'center center' }}

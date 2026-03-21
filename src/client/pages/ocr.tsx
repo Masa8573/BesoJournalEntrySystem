@@ -352,7 +352,7 @@ export default function OCRPage() {
   }
 
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col -m-6">
       <WorkflowHeader onBeforeNext={handleBeforeNext} nextLabel="AIチェックへ" />
 
       <div className="flex-1 overflow-y-auto p-6">

@@ -102,70 +102,71 @@ export default function WorkflowHeader({
   return (
     <div className="bg-white border-b border-gray-200 flex-shrink-0 sticky top-0 z-30">
       {/* Row 1: ナビゲーション（顧客名 + 前へ/次へ + 中断） */}
-      <div className="px-6 py-2.5 flex items-center justify-between">
-        {/* 左: 前へ */}
-        <button
-          onClick={handlePrev}
-          disabled={!canGoToPreviousStep()}
-          className={`
-            flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg transition-all
-            ${canGoToPreviousStep()
-              ? 'border-gray-300 text-gray-700 hover:bg-gray-50'
-              : 'border-gray-200 text-gray-300 cursor-not-allowed'
-            }
-          `}
-        >
-          <ArrowLeft size={15} />
-          <span>前へ</span>
-        </button>
-
-        {/* 中央: 顧客名 + ステップ名 */}
-        <div className="text-center">
-          <p className="text-xs text-gray-400">
-            {currentWorkflow.clientName}
-          </p>
-          <p className="text-sm font-semibold text-gray-900">
-            {getStepName(currentStep)}
-          </p>
+      <div className="px-6 py-2.5 relative">
+        {/* 中央: 顧客名 + ステップ名（absoluteで完全中央） */}
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className="text-center">
+            <p className="text-[10px] text-gray-400">{currentWorkflow.clientName}</p>
+            <p className="text-sm font-semibold text-gray-900">{getStepName(currentStep)}</p>
+          </div>
         </div>
 
-        {/* 右: 次へ or 完了 + 中断 */}
-        <div className="flex items-center gap-2">
+        {/* 左右ボタン（relativeで中央の上に重なる） */}
+        <div className="relative z-10 flex items-center justify-between">
+          {/* 左: 前へ */}
           <button
-            onClick={handleSaveAndExit}
-            className="flex items-center gap-1 px-2.5 py-1.5 text-xs text-gray-500 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
-            title="保存して中断"
+            onClick={handlePrev}
+            disabled={!canGoToPreviousStep()}
+            className={`
+              flex items-center gap-1.5 px-3 py-1.5 text-sm border rounded-lg transition-all
+              ${canGoToPreviousStep()
+                ? 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                : 'border-gray-200 text-gray-300 cursor-not-allowed'
+              }
+            `}
           >
-            <Save size={13} />
-            <span className="hidden sm:inline">中断</span>
+            <ArrowLeft size={15} />
+            <span>前へ</span>
           </button>
 
-          {showComplete ? (
+          {/* 右: 中断 + 次へ or 完了 */}
+          <div className="flex items-center gap-2">
             <button
-              onClick={handleComplete}
-              className="flex items-center gap-1.5 px-4 py-1.5 text-sm bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 transition-colors"
+              onClick={handleSaveAndExit}
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs text-gray-500 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+              title="保存して中断"
             >
-              <CheckCircle size={15} />
-              <span>完了</span>
+              <Save size={13} />
+              <span className="hidden sm:inline">中断</span>
             </button>
-          ) : (
-            <button
-              onClick={handleNext}
-              disabled={!canGoToNextStep()}
-              className={`
-                flex items-center gap-1.5 px-4 py-1.5 text-sm rounded-lg font-medium transition-all
-                ${canGoToNextStep()
-                  ? 'bg-blue-600 text-white hover:bg-blue-700'
-                  : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                }
-              `}
-            >
+
+            {showComplete ? (
+              <button
+                onClick={handleComplete}
+                className="flex items-center gap-1.5 px-4 py-1.5 text-sm bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 transition-colors"
+              >
+                <CheckCircle size={15} />
+                <span>完了</span>
+              </button>
+            ) : (
+              <button
+                onClick={handleNext}
+                disabled={!canGoToNextStep()}
+                className={`
+                  flex items-center gap-1.5 px-4 py-1.5 text-sm rounded-lg font-medium transition-all
+                  ${canGoToNextStep()
+                    ? 'bg-blue-600 text-white hover:bg-blue-700'
+                    : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                  }
+                `}
+              >
               <span>{nextLabel}</span>
               <ArrowRight size={15} />
             </button>
           )}
         </div>
-      </div>
+        </div>{/* /justify-between */}
+      </div>{/* /relative Row 1 */}
 
       {/* Row 2: ステップインジケーター（コンパクト） */}
       <div className="px-6 pb-3">
