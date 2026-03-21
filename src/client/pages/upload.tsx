@@ -112,7 +112,7 @@ export default function UploadPage() {
   }
 
   return (
-    <div className="flex flex-col h-screen">
+    <div className="flex flex-col">
       {/* ワークフローヘッダー（進捗 + ナビゲーション統合・上部配置） */}
       <WorkflowHeader onBeforeNext={handleBeforeNext} nextLabel="OCR処理へ" />
 

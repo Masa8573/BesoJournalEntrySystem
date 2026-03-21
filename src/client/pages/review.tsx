@@ -210,7 +210,7 @@ export default function ReviewPage() {
   const [itemsMaster, setItemsMaster] = useState<Array<{ id: string; name: string; code: string | null }>>([]);
   const [tags, setTags] = useState<Array<{ id: string; name: string; tag_type: string }>>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
-  const [businessRatio, setBusinessRatio] = useState(70); // C1: 家事按分率（デフォルト70%）
+  const [businessRatio, setBusinessRatio] = useState(100); // W2: デフォルト100%（家事按分なし）
   const [clientRatios, setClientRatios] = useState<Array<{ account_item_id: string; business_ratio: number }>>([]);
   const [loading, setLoading] = useState(true);
 
@@ -226,6 +226,7 @@ export default function ReviewPage() {
   const [zoom, setZoom] = useState(100);
   const [rotation, setRotation] = useState(0);
   const [addRule, setAddRule] = useState(false);
+  const [ruleScope, setRuleScope] = useState<'shared' | 'industry' | 'client'>('shared'); // W3
   const [ruleIndustryId, setRuleIndustryId] = useState('');
   const [ruleSuggestion, setRuleSuggestion] = useState(''); // R11: ルール追加理由のプレビュー
   const [supplierText, setSupplierText] = useState(''); // R2: マスタにない取引先テキスト
@@ -461,7 +462,8 @@ export default function ReviewPage() {
     if (addRule && form.accountItemId) {
       await supabase.from('processing_rules').insert([{
         rule_name: `${form.description || item.supplierName || '不明'} → 自動仕訳`, priority: 100,
-        rule_type: '支出', scope: ruleIndustryId ? 'industry' : 'shared', industry_id: ruleIndustryId || null,
+        rule_type: '支出', scope: ruleScope, industry_id: ruleScope === 'industry' ? (ruleIndustryId || null) : null,
+        client_id: ruleScope === 'client' ? currentWorkflow?.clientId || null : null,
         conditions: { supplier_pattern: item.supplierName || null },
         actions: { account_item_id: form.accountItemId, tax_category_id: form.taxCategoryId || null, description_template: form.description || null },
         auto_apply: true, require_confirmation: false, is_active: true,
@@ -496,6 +498,23 @@ export default function ReviewPage() {
     }
 
     setItems(prev => prev.map((it, i) => i === currentIndex ? { ...it, ...form, entryId, status: targetStatus } as DocumentWithEntry : it));
+
+    // W6: 一覧テーブルもリアルタイム更新（ページリロード不要）
+    setEntries(prev => prev.map(e => {
+      if (e.id === entryId || e.document_id === item.docId) {
+        return {
+          ...e,
+          status: targetStatus,
+          is_excluded: form.isExcluded || false,
+          description: form.description || e.description,
+          accountItemName: accountItems.find(a => a.id === form.accountItemId)?.name || e.accountItemName,
+          taxCategoryName: taxCategories.find(t => t.id === form.taxCategoryId)?.name || e.taxCategoryName,
+          amount: form.lineAmount || e.amount,
+        };
+      }
+      return e;
+    }));
+
     setSaving(false); setSavedAt(new Date().toLocaleTimeString('ja-JP'));
   };
 
@@ -505,7 +524,7 @@ export default function ReviewPage() {
     if (currentIndex < items.length - 1) {
       const next = currentIndex + 1;
       setCurrentIndex(next); setForm({ ...items[next] }); setSavedAt(null); setAddRule(false); setRuleIndustryId(''); setRotation(0);
-      setSelectedTagIds([]); setBusinessRatio(70); setAiOriginalForm({}); setSupplierText(""); setItemText(""); setRuleSuggestion(""); // リセット
+      setSelectedTagIds([]); setBusinessRatio(100); setAiOriginalForm({}); setSupplierText(""); setItemText(""); setRuleSuggestion(""); // リセット
       loadTagsForEntry(items[next].entryId);
     }
   };
@@ -514,7 +533,7 @@ export default function ReviewPage() {
     if (currentIndex > 0) {
       const prev = currentIndex - 1;
       setCurrentIndex(prev); setForm({ ...items[prev] }); setSavedAt(null); setAddRule(false); setRuleIndustryId(''); setRotation(0);
-      setSelectedTagIds([]); setBusinessRatio(70); setAiOriginalForm({}); setSupplierText(""); setItemText(""); setRuleSuggestion(""); // リセット
+      setSelectedTagIds([]); setBusinessRatio(100); setAiOriginalForm({}); setSupplierText(""); setItemText(""); setRuleSuggestion(""); // リセット
       loadTagsForEntry(items[prev].entryId);
     }
   };
@@ -665,7 +684,7 @@ export default function ReviewPage() {
     </div>
   );
   if (loading) return (
-    <div className="flex flex-col h-screen">
+    <div className="flex flex-col">
       <WorkflowHeader onBeforeNext={handleBeforeNext} nextLabel="仕訳出力へ" />
       <div className="flex-1 flex items-center justify-center">
         <Loader size={32} className="animate-spin text-blue-500" /><span className="ml-3 text-gray-500">読み込み中...</span>
@@ -677,7 +696,7 @@ export default function ReviewPage() {
   // レンダリング
   // ============================================
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
+    <div className="flex flex-col bg-gray-50">
       <WorkflowHeader onBeforeNext={handleBeforeNext} nextLabel="仕訳出力へ" />
 
       {/* タブ */}
@@ -736,10 +755,41 @@ export default function ReviewPage() {
               )}
             </div>
 
-            <div className={viewMode === 'detail' ? 'max-h-[240px] overflow-y-auto' : ''}>
+            <div className={viewMode === 'detail' ? '' : ''}>
+              {viewMode === 'detail' ? (
+                /* W5: 個別チェック時のコンパクト一覧（3行表示、ヘッダーなし） */
+                <div className="max-h-[100px] overflow-y-auto">
+                  <table className="w-full">
+                    <tbody className="divide-y divide-gray-100">
+                      {filteredEntries.map((entry, idx) => {
+                        const isSelected = items[currentIndex]?.entryId === entry.id;
+                        const statusLabel = entry.is_excluded ? '対象外' : entry.status === 'approved' ? '確認済' : entry.status === 'posted' ? '確定' : '未確認';
+                        return (
+                          <tr key={entry.id} onClick={() => openDetail(entry.id)}
+                            className={`cursor-pointer text-xs transition-colors ${isSelected ? 'bg-blue-100 font-semibold' : 'hover:bg-gray-50'}`}>
+                            <td className="pl-3 pr-1 py-1.5 text-gray-400 w-8">{idx + 1}</td>
+                            <td className="px-1 py-1.5 text-gray-700 truncate max-w-[120px]">{entry.description || '-'}</td>
+                            <td className="px-1 py-1.5 text-gray-500">{entry.accountItemName || '-'}</td>
+                            <td className="px-1 py-1.5 text-right tabular-nums">{fmt(entry.amount)}</td>
+                            <td className="px-2 py-1.5 text-center">
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+                                entry.status === 'approved' ? 'bg-green-100 text-green-700' :
+                                entry.status === 'posted' ? 'bg-purple-100 text-purple-700' :
+                                entry.is_excluded ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-500'
+                              }`}>{statusLabel}</span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                /* 一覧モードのフルテーブル */
               <table className="w-full">
                 <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
                   <tr>
+                    <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase w-10">#</th>
                     <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase">取引日</th>
                     <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase">摘要</th>
                     <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase">勘定科目</th>
@@ -750,13 +800,14 @@ export default function ReviewPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {filteredEntries.length === 0 ? (
-                    <tr><td colSpan={6} className="px-4 py-12 text-center text-gray-400">データがありません</td></tr>
-                  ) : filteredEntries.map(entry => {
+                    <tr><td colSpan={7} className="px-4 py-12 text-center text-gray-400">データがありません</td></tr>
+                  ) : filteredEntries.map((entry, idx) => {
                     const needsReview = entry.requires_review || (entry.ai_confidence != null && entry.ai_confidence < 0.7);
-                    const isSelected = viewMode === 'detail' && items[currentIndex]?.entryId === entry.id;
+                    const isSelected = items[currentIndex]?.entryId === entry.id;
                     return (
                       <tr key={entry.id} onClick={() => openDetail(entry.id)}
                         className={`cursor-pointer transition-colors hover:bg-gray-50 ${needsReview ? 'bg-yellow-50' : ''} ${isSelected ? 'bg-blue-50' : ''} ${entry.status === 'approved' ? 'bg-green-50/30' : ''}`}>
+                        <td className="px-3 py-3 text-xs text-gray-400">{idx + 1}</td>
                         <td className="px-4 py-3 text-sm">{new Date(entry.entry_date).toLocaleDateString('ja-JP')}</td>
                         <td className="px-4 py-3 text-sm max-w-[200px] truncate">{entry.description || '-'}</td>
                         <td className="px-4 py-3 text-sm">{entry.accountItemName || '-'}</td>
@@ -788,6 +839,7 @@ export default function ReviewPage() {
                   })}
                 </tbody>
               </table>
+              )}
             </div>
           </div>
 
@@ -811,13 +863,15 @@ export default function ReviewPage() {
                       <button onClick={() => setRotation(r => (r + 90) % 360)} className="p-1.5 hover:bg-gray-100 rounded text-gray-600" title="90度回転"><RotateCcw size={14} /></button>
                     </div>
                   </div>
-                  <div className="flex-1 overflow-auto bg-slate-100 flex items-start justify-center p-4">
+                  <div className="flex-1 overflow-auto bg-slate-100 flex items-start justify-center p-4" style={{ minHeight: 400 }}>
                     {ci.imageUrl ? (
                       ci.fileName?.toLowerCase().endsWith('.pdf') ? (
-                        <iframe src={ci.imageUrl} className="w-full h-full border-0" title={ci.fileName} />
+                        <div style={{ width: `${zoom}%`, transform: `rotate(${rotation}deg)`, transition: 'transform .3s', transformOrigin: 'center center' }}>
+                          <iframe src={`${ci.imageUrl}#toolbar=0`} className="w-full border-0 rounded shadow-sm" style={{ height: 600 }} title={ci.fileName} />
+                        </div>
                       ) : (
                         <img src={ci.imageUrl} alt={ci.fileName}
-                          style={{ width: `${zoom}%`, maxWidth: 'none', transform: `rotate(${rotation}deg)`, transition: 'transform .3s' }}
+                          style={{ width: `${zoom}%`, maxWidth: 'none', transform: `rotate(${rotation}deg)`, transition: 'transform .3s', transformOrigin: 'center center' }}
                           className="rounded shadow-sm border border-gray-200 object-contain" />
                       )
                     ) : (
@@ -913,7 +967,7 @@ export default function ReviewPage() {
                             }
                             setForm(p => ({ ...p, taxCategoryId: tcId, taxRate: newRate }));
                           }}
-                          options={taxCategories.map(t => ({ id: t.id, name: t.display_name || t.name, code: t.code, short_name: null }))}
+                          options={taxCategories.map(t => ({ id: t.id, name: t.display_name || t.name, code: undefined, short_name: t.code, name_kana: null }))}
                           placeholder="税区分を検索" />
                       </div>
                     </div>
@@ -969,14 +1023,23 @@ export default function ReviewPage() {
 
                     {/* C1: 家事按分 */}
                     {!form.isExcluded && (
-                      <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 space-y-2">
+                      <div className={`border rounded-lg p-3 space-y-2 ${businessRatio === 100 ? 'bg-blue-50 border-blue-200' : 'bg-orange-50 border-orange-200'}`}>
                         <div className="flex items-center justify-between">
-                          <label className="text-xs font-semibold text-orange-800">家事按分（事業用割合）</label>
-                          <span className="text-xs text-orange-600 font-medium">{businessRatio}% 事業用 / {100 - businessRatio}% 私用</span>
+                          <label className={`text-xs font-semibold ${businessRatio === 100 ? 'text-blue-800' : 'text-orange-800'}`}>家事按分（事業用割合）</label>
+                          <div className="flex items-center gap-1.5">
+                            <button type="button" onClick={() => setBusinessRatio(Math.max(0, businessRatio - 1))}
+                              className="w-5 h-5 flex items-center justify-center rounded bg-white border border-gray-300 text-gray-500 text-xs hover:bg-gray-50">−</button>
+                            <input type="number" min={0} max={100} value={businessRatio}
+                              onChange={e => setBusinessRatio(Math.min(100, Math.max(0, Number(e.target.value) || 0)))}
+                              className="w-12 text-center text-xs font-bold border border-gray-300 rounded p-0.5" />
+                            <span className="text-xs text-gray-500">%</span>
+                            <button type="button" onClick={() => setBusinessRatio(Math.min(100, businessRatio + 1))}
+                              className="w-5 h-5 flex items-center justify-center rounded bg-white border border-gray-300 text-gray-500 text-xs hover:bg-gray-50">+</button>
+                          </div>
                         </div>
-                        <input type="range" min={0} max={100} step={5} value={businessRatio}
+                        <input type="range" min={0} max={100} step={1} value={businessRatio}
                           onChange={e => setBusinessRatio(Number(e.target.value))}
-                          className="w-full h-2 bg-orange-200 rounded-lg appearance-none cursor-pointer accent-orange-500" />
+                          className={`w-full h-2 rounded-lg appearance-none cursor-pointer ${businessRatio === 100 ? 'bg-blue-200 accent-blue-500' : 'bg-orange-200 accent-orange-500'}`} />
                         {businessRatio < 100 && (
                           <div className="grid grid-cols-2 gap-2 text-xs">
                             <div className="bg-white rounded p-2 border border-orange-200">
@@ -1031,11 +1094,19 @@ export default function ReviewPage() {
                         </label>
                         <span className="text-[10px] px-1.5 py-0.5 border border-gray-300 rounded bg-gray-50 font-mono text-gray-500">R</span>
                         {addRule && (
-                          <select value={ruleIndustryId} onChange={e => setRuleIndustryId(e.target.value)}
-                            className="border border-gray-300 rounded-md p-1.5 text-xs bg-white">
-                            <option value="">共通ルール</option>
-                            {industries.map(ind => <option key={ind.id} value={ind.id}>{ind.name}</option>)}
-                          </select>
+                          <div className="flex items-center gap-1.5">
+                            <select value={ruleScope} onChange={e => setRuleScope(e.target.value as any)}
+                              className="border border-gray-300 rounded-md p-1.5 text-xs bg-white">
+                              <option value="shared">共通</option>
+                              <option value="industry">業種</option>
+                              <option value="client">この顧客</option>
+                            </select>
+                            {ruleScope === 'industry' && (
+                              <ComboBox value={ruleIndustryId} onChange={setRuleIndustryId}
+                                options={industries.map(ind => ({ id: ind.id, name: ind.name }))}
+                                placeholder="業種を選択" />
+                            )}
+                          </div>
                         )}
                       </div>
                       {/* R11: ルール追加プレビュー */}

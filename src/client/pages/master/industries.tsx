@@ -26,6 +26,9 @@ export default function IndustriesPage() {
   const [showModal, setShowModal] = useState(false);
   const [editingIndustry, setEditingIndustry] = useState<Industry | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [userRole, setUserRole] = useState<string>('staff');
+
+  const canEdit = userRole === 'admin';
 
   const [formData, setFormData] = useState({
     code: '',
@@ -38,6 +41,11 @@ export default function IndustriesPage() {
 
   const loadData = async () => {
     setLoading(true);
+    const { data: authData } = await supabase.auth.getUser();
+    if (authData.user) {
+      const { data: userRow } = await supabase.from('users').select('role').eq('id', authData.user.id).single();
+      if (userRow) setUserRole(userRow.role);
+    }
     const [indRes, clientRes] = await Promise.all([
       supabase.from('industries').select('*').eq('is_active', true).order('sort_order', { ascending: true }),
       supabase.from('clients').select('id, industry_id'),
@@ -250,14 +258,17 @@ export default function IndustriesPage() {
           <td className="px-4 py-2.5 text-right">
             <div className="flex items-center justify-end gap-0.5">
               {node.level < 2 && (
-                <button onClick={() => handleOpenNewModal(node.id)} className="p-1.5 text-green-600 hover:bg-green-50 rounded" title="子項目を追加">
+                <button onClick={() => canEdit && handleOpenNewModal(node.id)} disabled={!canEdit}
+                  className={`p-1.5 rounded ${canEdit ? 'text-green-600 hover:bg-green-50' : 'text-gray-300 cursor-not-allowed'}`} title="子項目を追加">
                   <Plus size={14} />
                 </button>
               )}
-              <button onClick={() => handleOpenEditModal(node)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded" title="編集">
+              <button onClick={() => canEdit && handleOpenEditModal(node)} disabled={!canEdit}
+                className={`p-1.5 rounded ${canEdit ? 'text-blue-600 hover:bg-blue-50' : 'text-gray-300 cursor-not-allowed'}`} title="編集">
                 <Edit size={14} />
               </button>
-              <button onClick={() => handleDelete(node)} className="p-1.5 text-red-600 hover:bg-red-50 rounded" title="削除">
+              <button onClick={() => canEdit && handleDelete(node)} disabled={!canEdit}
+                className={`p-1.5 rounded ${canEdit ? 'text-red-600 hover:bg-red-50' : 'text-gray-300 cursor-not-allowed'}`} title="削除">
                 <Trash2 size={14} />
               </button>
             </div>

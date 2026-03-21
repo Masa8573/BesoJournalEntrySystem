@@ -108,9 +108,17 @@ export const workflowsApi = {
 
   /** 完了 */
   complete: async (id: string): Promise<boolean> => {
+    // D7: 完了者の記録
+    const { data: authData } = await supabase.auth.getUser();
+    const completedBy = authData.user?.id || null;
+
     const { error } = await supabase
       .from('workflows')
-      .update({ status: 'completed', completed_at: new Date().toISOString() })
+      .update({
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+        completed_by: completedBy,
+      })
       .eq('id', id);
 
     return !error;

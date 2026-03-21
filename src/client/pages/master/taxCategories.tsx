@@ -46,6 +46,10 @@ export default function TaxCategoriesPage() {
   const [activeTab, setActiveTab] = useState<'all' | 'income' | 'expense'>('all');
   const [activeSection, setActiveSection] = useState<'categories' | 'rates'>('categories');
   const [loading, setLoading] = useState(true);
+  const [userRole, setUserRole] = useState<string>('staff');
+
+  //const canEditTaxCat = userRole === 'admin'; // 税区分はadminのみ
+  //const canEditSettings = userRole === 'admin' || userRole === 'accountant'; // 顧客別設定はaccountantも可
 
   // 税区分詳細モーダル
   const [showDetailModal, setShowDetailModal] = useState(false);
@@ -62,6 +66,11 @@ export default function TaxCategoriesPage() {
 
   const loadData = async () => {
     setLoading(true);
+    const { data: authData } = await supabase.auth.getUser();
+    if (authData.user) {
+      const { data: userRow } = await supabase.from('users').select('role').eq('id', authData.user.id).single();
+      if (userRow) setUserRole(userRow.role);
+    }
     const [taxRes, rateRes, clientRes] = await Promise.all([
       supabase.from('tax_categories').select('*').order('sort_order', { ascending: true }),
       supabase.from('tax_rates').select('*').order('rate', { ascending: false }),

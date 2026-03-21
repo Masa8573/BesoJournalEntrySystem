@@ -100,7 +100,7 @@ export default function WorkflowHeader({
   const progressPercent = Math.round((completedCount / TOTAL_STEPS) * 100);
 
   return (
-    <div className="bg-white border-b border-gray-200 flex-shrink-0">
+    <div className="bg-white border-b border-gray-200 flex-shrink-0 sticky top-0 z-30">
       {/* Row 1: ナビゲーション（顧客名 + 前へ/次へ + 中断） */}
       <div className="px-6 py-2.5 flex items-center justify-between">
         {/* 左: 前へ */}

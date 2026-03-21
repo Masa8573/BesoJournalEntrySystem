@@ -43,6 +43,10 @@ export default function SuppliersPage() {
   const [activeModalTab, setActiveModalTab] = useState<'info' | 'aliases'>('info');
   const [aliases, setAliases] = useState<SupplierAlias[]>([]);
   const [newAliasName, setNewAliasName] = useState('');
+  const [orgId, setOrgId] = useState<string | null>(null);
+  const [userRole, setUserRole] = useState<string>('staff');
+
+  const canEdit = userRole === 'admin' || userRole === 'accountant';
 
   const [formData, setFormData] = useState({
     name: '',
@@ -56,6 +60,12 @@ export default function SuppliersPage() {
 
   const loadSuppliers = async () => {
     setLoading(true);
+    // P1: orgId/role取得
+    const { data: authData } = await supabase.auth.getUser();
+    if (authData.user) {
+      const { data: userRow } = await supabase.from('users').select('organization_id, role').eq('id', authData.user.id).single();
+      if (userRow) { setOrgId(userRow.organization_id); setUserRole(userRow.role); }
+    }
     const { data, error } = await supabase
       .from('suppliers')
       .select('*')
@@ -102,7 +112,7 @@ export default function SuppliersPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const data = {
+    const data: any = {
       name: formData.name,
       name_kana: formData.name_kana || null,
       code: formData.code || null,
@@ -110,6 +120,7 @@ export default function SuppliersPage() {
       is_invoice_registered: formData.is_invoice_registered,
       is_active: true,
     };
+    if (!editingSupplier) data.organization_id = orgId;
 
     if (editingSupplier) {
       const { error } = await supabase.from('suppliers').update(data).eq('id', editingSupplier.id);
@@ -178,7 +189,8 @@ export default function SuppliersPage() {
           <h1 className="text-2xl font-bold text-gray-900">取引先管理</h1>
           <p className="text-sm text-gray-500 mt-1">OCR・AI仕訳生成で使用する取引先マスタを管理します</p>
         </div>
-        <button onClick={handleOpenNewModal} className="flex items-center gap-2 btn-primary">
+        <button onClick={handleOpenNewModal} disabled={!canEdit}
+          className={`flex items-center gap-2 btn-primary ${!canEdit ? 'opacity-40 cursor-not-allowed' : ''}`}>
           <Plus size={18} />新規取引先
         </button>
       </div>
@@ -225,8 +237,10 @@ export default function SuppliersPage() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right">
                       <div className="flex items-center justify-end gap-2">
-                        <button onClick={() => handleOpenEditModal(supplier)} className="p-1 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded"><Edit size={18} /></button>
-                        <button onClick={() => handleDelete(supplier)} className="p-1 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded"><Trash2 size={18} /></button>
+                        <button onClick={() => canEdit && handleOpenEditModal(supplier)} disabled={!canEdit}
+                          className={`p-1 rounded ${canEdit ? 'text-gray-600 hover:text-blue-600 hover:bg-blue-50' : 'text-gray-300 cursor-not-allowed'}`}><Edit size={18} /></button>
+                        <button onClick={() => canEdit && handleDelete(supplier)} disabled={!canEdit}
+                          className={`p-1 rounded ${canEdit ? 'text-gray-600 hover:text-red-600 hover:bg-red-50' : 'text-gray-300 cursor-not-allowed'}`}><Trash2 size={18} /></button>
                       </div>
                     </td>
                   </tr>

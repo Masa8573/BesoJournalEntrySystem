@@ -253,8 +253,8 @@ export default function RulesPage() {
         // 同じ取引先パターン AND 同じ勘定科目
         const sameSupplier = a.conditions?.supplier_pattern && b.conditions?.supplier_pattern &&
           a.conditions.supplier_pattern.toLowerCase() === b.conditions.supplier_pattern.toLowerCase();
-        /*const sameAccount = a.actions?.account_item_id && b.actions?.account_item_id &&
-          a.actions.account_item_id === b.actions.account_item_id;*/
+        //const sameAccount = a.actions?.account_item_id && b.actions?.account_item_id &&
+          //a.actions.account_item_id === b.actions.account_item_id;
         // 同じ取引先パターン（勘定科目違い）も警告
         if (sameSupplier) {
           dups.push({ rule1: a, rule2: b });
@@ -323,14 +323,37 @@ export default function RulesPage() {
             <button onClick={() => setShowDuplicates(false)} className="text-xs text-orange-600 hover:underline">閉じる</button>
           </div>
           <div className="space-y-2">
-            {duplicates.map((d, i) => (
-              <div key={i} className="bg-white rounded p-2 text-xs text-gray-700 border border-orange-100">
-                <span className="font-medium">#{d.rule1.priority} {d.rule1.rule_name}</span>
-                <span className="mx-2 text-orange-400">↔</span>
-                <span className="font-medium">#{d.rule2.priority} {d.rule2.rule_name}</span>
-                <span className="ml-2 text-gray-400">（パターン: {d.rule1.conditions?.supplier_pattern}）</span>
+            {duplicates.map((d, i) => {
+              const lowerPriority = d.rule1.priority >= d.rule2.priority ? d.rule1 : d.rule2;
+              return (
+              <div key={i} className="bg-white rounded p-2 text-xs text-gray-700 border border-orange-100 flex items-center justify-between">
+                <div>
+                  <span className="font-medium">#{d.rule1.priority} {d.rule1.rule_name}</span>
+                  <span className="mx-2 text-orange-400">↔</span>
+                  <span className="font-medium">#{d.rule2.priority} {d.rule2.rule_name}</span>
+                  <span className="ml-2 text-gray-400">（パターン: {d.rule1.conditions?.supplier_pattern}）</span>
+                </div>
+                <div className="flex items-center gap-1.5 flex-shrink-0 ml-3">
+                  <button onClick={async () => {
+                    if (!window.confirm(`「${lowerPriority.rule_name}」（優先度${lowerPriority.priority}）を無効化しますか？`)) return;
+                    await supabase.from('processing_rules').update({ is_active: false }).eq('id', lowerPriority.id);
+                    loadData();
+                    setDuplicates(prev => prev.filter((_, idx) => idx !== i));
+                  }} className="px-2 py-1 text-[10px] bg-orange-100 text-orange-700 rounded hover:bg-orange-200 whitespace-nowrap">
+                    低優先を無効化
+                  </button>
+                  <button onClick={async () => {
+                    if (!window.confirm(`「${lowerPriority.rule_name}」を完全に削除しますか？この操作は元に戻せません。`)) return;
+                    await supabase.from('processing_rules').delete().eq('id', lowerPriority.id);
+                    loadData();
+                    setDuplicates(prev => prev.filter((_, idx) => idx !== i));
+                  }} className="px-2 py-1 text-[10px] bg-red-100 text-red-700 rounded hover:bg-red-200 whitespace-nowrap">
+                    削除
+                  </button>
+                </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

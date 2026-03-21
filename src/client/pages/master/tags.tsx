@@ -18,6 +18,8 @@ const COLOR_OPTIONS = [
 export default function TagsPage() {
   const [tags, setTags] = useState<Tag[]>([]);
   const [orgId, setOrgId] = useState<string | null>(null);
+  const [userRole, setUserRole] = useState<string>('staff');
+  const canEdit = userRole === 'admin' || userRole === 'accountant';
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<'all' | 'document' | 'journal_entry' | 'general'>('all');
   const [loading, setLoading] = useState(true);
@@ -34,10 +36,10 @@ export default function TagsPage() {
     if (userData.user) {
       const { data: userRow } = await supabase
         .from('users')
-        .select('organization_id')
+        .select('organization_id, role')
         .eq('id', userData.user.id)
         .single();
-      if (userRow) setOrgId(userRow.organization_id);
+      if (userRow) { setOrgId(userRow.organization_id); setUserRole(userRow.role); }
     }
 
     const { data, error } = await supabase
@@ -129,7 +131,8 @@ export default function TagsPage() {
           <h1 className="text-2xl font-bold text-gray-900">タグ管理</h1>
           <p className="text-sm text-gray-500 mt-1">証憑タグ・仕訳タグ・汎用タグを管理します（取引先・品目は専用マスタで管理）</p>
         </div>
-        <button onClick={handleOpenNewModal} className="flex items-center gap-2 btn-primary">
+        <button onClick={handleOpenNewModal} disabled={!canEdit}
+          className={`flex items-center gap-2 btn-primary ${!canEdit ? 'opacity-40 cursor-not-allowed' : ''}`}>
           <Plus size={18} />新規タグ
         </button>
       </div>
@@ -210,8 +213,10 @@ export default function TagsPage() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right">
                       <div className="flex items-center justify-end gap-2">
-                        <button onClick={() => handleOpenEditModal(tag)} className="p-1 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded"><Edit size={18} /></button>
-                        <button onClick={() => handleDelete(tag)} className="p-1 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded"><Trash2 size={18} /></button>
+                        <button onClick={() => canEdit && handleOpenEditModal(tag)} disabled={!canEdit}
+                          className={`p-1 rounded ${canEdit ? 'text-gray-600 hover:text-blue-600 hover:bg-blue-50' : 'text-gray-300 cursor-not-allowed'}`}><Edit size={18} /></button>
+                        <button onClick={() => canEdit && handleDelete(tag)} disabled={!canEdit}
+                          className={`p-1 rounded ${canEdit ? 'text-gray-600 hover:text-red-600 hover:bg-red-50' : 'text-gray-300 cursor-not-allowed'}`}><Trash2 size={18} /></button>
                       </div>
                     </td>
                   </tr>

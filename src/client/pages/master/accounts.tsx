@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Edit, Trash2, Search } from 'lucide-react';
+import { Plus, Edit, Trash2, Search, ChevronDown, ChevronUp } from 'lucide-react';
 import type { AccountItem, AccountCategory, TaxCategory } from '@/types';
 import Modal from '@/client/components/ui/Modal';
 import { supabase } from '@/client/lib/supabase';
@@ -30,6 +30,11 @@ export default function AccountsPage() {
   const [showModal, setShowModal] = useState(false);
   const [editingItem, setEditingItem] = useState<AccountItem | null>(null);
   const [expandedDescription, setExpandedDescription] = useState<string | null>(null);
+  const [orgId, setOrgId] = useState<string | null>(null);
+  const [userRole, setUserRole] = useState<string>('staff');
+
+  const canEdit = userRole === 'admin' || userRole === 'accountant';
+  const canDelete = userRole === 'admin';
 
   const [formData, setFormData] = useState({
     code: '',
@@ -52,8 +57,14 @@ export default function AccountsPage() {
     }
   }, [activeTab, showActiveOnly, accountCategories]);
 
-  // マスタデータ（カテゴリ・税区分）を先に取得
+  // マスタデータ（カテゴリ・税区分）を先に取得 + P1: orgId/role
   const loadMasterData = async () => {
+    // ユーザー情報取得
+    const { data: authData } = await supabase.auth.getUser();
+    if (authData.user) {
+      const { data: userRow } = await supabase.from('users').select('organization_id, role').eq('id', authData.user.id).single();
+      if (userRow) { setOrgId(userRow.organization_id); setUserRole(userRow.role); }
+    }
     const [catRes, taxRes] = await Promise.all([
       supabase.from('account_categories').select('*').order('sort_order'),
       supabase.from('tax_categories').select('*').order('sort_order'),
@@ -151,7 +162,7 @@ export default function AccountsPage() {
       return;
     }
 
-    const itemData = {
+    const itemData: any = {
       code: formData.code,
       name: formData.name,
       name_kana: formData.name_kana || null,
@@ -165,6 +176,8 @@ export default function AccountsPage() {
       is_system: false,
       is_active: true,
     };
+    // P1: 新規作成時のみorganization_idをセット
+    if (!editingItem) itemData.organization_id = orgId;
 
     if (editingItem) {
       const { error } = await supabase
@@ -283,7 +296,9 @@ export default function AccountsPage() {
           <h1 className="text-2xl font-bold text-gray-900">勘定科目管理</h1>
           <p className="text-sm text-gray-500 mt-1">仕訳で使用する勘定科目を管理します</p>
         </div>
-        <button onClick={handleOpenNewModal} className="flex items-center gap-2 btn-primary">
+        <button onClick={handleOpenNewModal} disabled={!canEdit}
+          className={`flex items-center gap-2 btn-primary ${!canEdit ? 'opacity-40 cursor-not-allowed' : ''}`}
+          title={!canEdit ? '編集権限がありません' : ''}>
           <Plus size={18} />
           新規勘定科目
         </button>
@@ -447,15 +462,17 @@ export default function AccountsPage() {
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-2">
                         <button
-                          onClick={() => handleOpenEditModal(item)}
-                          className="p-1 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded"
+                          onClick={() => canEdit && handleOpenEditModal(item)}
+                          disabled={!canEdit}
+                          className={`p-1 rounded ${canEdit ? 'text-gray-600 hover:text-blue-600 hover:bg-blue-50' : 'text-gray-300 cursor-not-allowed'}`}
                         >
                           <Edit size={18} />
                         </button>
                         {!item.is_system && (
                           <button
-                            onClick={() => handleDelete(item)}
-                            className="p-1 text-gray-600 hover:text-red-600 hover:bg-red-50 rounded"
+                            onClick={() => canDelete && handleDelete(item)}
+                            disabled={!canDelete}
+                            className={`p-1 rounded ${canDelete ? 'text-gray-600 hover:text-red-600 hover:bg-red-50' : 'text-gray-300 cursor-not-allowed'}`}
                           >
                             <Trash2 size={18} />
                           </button>

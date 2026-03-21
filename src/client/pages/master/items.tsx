@@ -66,6 +66,10 @@ export default function ItemsPage() {
   const [newAliasName, setNewAliasName] = useState('');
   const [accountItems, setAccountItems] = useState<AccountItemOption[]>([]);
   const [taxCategories, setTaxCategories] = useState<TaxCategoryOption[]>([]);
+  const [orgId, setOrgId] = useState<string | null>(null);
+  const [userRole, setUserRole] = useState<string>('staff');
+
+  const canEdit = userRole === 'admin' || userRole === 'accountant';
 
   const [formData, setFormData] = useState({
     name: '',
@@ -85,6 +89,11 @@ export default function ItemsPage() {
   // ============================================
   const loadItems = async () => {
     setLoading(true);
+    const { data: authData } = await supabase.auth.getUser();
+    if (authData.user) {
+      const { data: userRow } = await supabase.from('users').select('organization_id, role').eq('id', authData.user.id).single();
+      if (userRow) { setOrgId(userRow.organization_id); setUserRole(userRow.role); }
+    }
     const { data, error } = await supabase
       .from('items')
       .select('*')
@@ -158,7 +167,7 @@ export default function ItemsPage() {
   // ============================================
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const data = {
+    const data: any = {
       name: formData.name,
       code: formData.code || null,
       unit: formData.unit || null,
@@ -169,6 +178,7 @@ export default function ItemsPage() {
       description: formData.description || null,
       is_active: true,
     };
+    if (!editingItem) data.organization_id = orgId;
 
     if (editingItem) {
       const { error } = await supabase.from('items').update(data).eq('id', editingItem.id);
@@ -260,7 +270,8 @@ export default function ItemsPage() {
           <h1 className="text-2xl font-bold text-gray-900">品目管理</h1>
           <p className="text-sm text-gray-500 mt-1">仕訳に使用する品目を管理します。別名（表記ゆれ）も登録できます。</p>
         </div>
-        <button onClick={handleOpenNewModal} className="flex items-center gap-2 btn-primary">
+        <button onClick={handleOpenNewModal} disabled={!canEdit}
+          className={`flex items-center gap-2 btn-primary ${!canEdit ? 'opacity-40 cursor-not-allowed' : ''}`}>
           <Plus size={18} />
           新規品目登録
         </button>
@@ -341,7 +352,8 @@ export default function ItemsPage() {
                       <button onClick={() => handleOpenEditModal(item)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded" title="編集">
                         <Edit size={16} />
                       </button>
-                      <button onClick={() => handleDelete(item)} className="p-1.5 text-red-600 hover:bg-red-50 rounded" title="削除">
+                      <button onClick={() => canEdit && handleDelete(item)} disabled={!canEdit}
+                        className={`p-1.5 rounded ${canEdit ? 'text-red-600 hover:bg-red-50' : 'text-gray-300 cursor-not-allowed'}`} title="削除">
                         <Trash2 size={16} />
                       </button>
                     </div>

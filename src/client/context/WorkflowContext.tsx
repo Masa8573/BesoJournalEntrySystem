@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { workflowsApi, getStepPath } from '@/client/lib/workflowStorage';
 import type { WorkflowState } from '@/client/lib/workflowStorage';
 
@@ -40,13 +40,21 @@ interface WorkflowProviderProps {
 
 export function WorkflowProvider({ children }: WorkflowProviderProps) {
   const navigate = useNavigate();
+  const location = useLocation();
 
   // パスパラメータから client_id を取得
-  // /clients/:id/* のどのページにいても id を取得できる
   const params = useParams<{ id?: string }>();
   const clientIdFromPath = params.id;
 
   const [currentWorkflow, setCurrentWorkflow] = useState<WorkflowState | null>(null);
+
+  // H4: URLパスからステップ番号を推定
+  const getStepFromPath = (pathname: string): number | null => {
+    const slugToStep: Record<string, number> = { upload: 1, ocr: 2, review: 3, export: 4 };
+    const match = pathname.match(/\/clients\/[^/]+\/(\w+)/);
+    if (match) return slugToStep[match[1]] ?? null;
+    return null;
+  };
 
   // ============================================
   // 初期化：URLのclient_idからワークフローを復元
@@ -62,6 +70,20 @@ export function WorkflowProvider({ children }: WorkflowProviderProps) {
       }
     });
   }, [clientIdFromPath]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // H4: URLパスが変わった時にcurrentStepを同期
+  useEffect(() => {
+    if (!currentWorkflow) return;
+    const stepFromPath = getStepFromPath(location.pathname);
+    if (stepFromPath && stepFromPath !== currentWorkflow.currentStep) {
+      // DB更新（navigateは不要、既にそのページにいる）
+      workflowsApi.update(currentWorkflow.id, { currentStep: stepFromPath }).then(updated => {
+        if (updated) {
+          setCurrentWorkflow({ ...updated, clientName: currentWorkflow.clientName });
+        }
+      });
+    }
+  }, [location.pathname]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ============================================
   // 新規ワークフロー開始

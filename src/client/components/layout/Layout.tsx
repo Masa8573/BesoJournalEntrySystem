@@ -30,7 +30,18 @@ import { useWorkflow } from '../../context/WorkflowContext';
 // ============================================================
 function Sidebar() {
   const location = useLocation();
+  const navigate = useNavigate();
   const { currentWorkflow } = useWorkflow();
+  const { user } = useAuth();
+  const [showUserMenu, setShowUserMenu] = useState(false);
+
+  const displayName = user?.user_metadata?.full_name ?? user?.user_metadata?.name ?? user?.email ?? '';
+  const displayEmail = user?.email ?? '';
+
+  const handleSignOut = async () => {
+    await auth.signOut();
+    navigate('/login');
+  };
 
   // URLパスパラメータから client_id を取得（ワークフローページにいる場合）
   const workflowMatch = useMatch("/clients/:id/*");
@@ -118,7 +129,7 @@ function Sidebar() {
   // 仕訳確認と仕訳出力は個別にレンダリング（サブメニュー付きのため）
 
   return (
-    <aside className="w-64 bg-gray-50 border-r border-gray-200 h-screen overflow-y-auto flex-shrink-0">
+    <aside className="w-64 bg-gray-50 border-r border-gray-200 h-screen flex flex-col flex-shrink-0">
       {/* ロゴ */}
       <div className="p-4 border-b border-gray-200">
         <div className="flex items-center gap-2">
@@ -128,7 +139,7 @@ function Sidebar() {
       </div>
 
       {/* メニュー */}
-      <nav className="p-2">
+      <nav className="p-2 flex-1 overflow-y-auto">
         {/* ───────────── 業務セクション ───────────── */}
         <div className="mb-1">
           <button
@@ -377,83 +388,39 @@ function Sidebar() {
           )}
         </div>
       </nav>
-    </aside>
-  );
-}
 
-// ============================================================
-// ヘッダーコンポーネント
-// ============================================================
-function Header() {
-  const navigate = useNavigate();
-  const [showUserMenu, setShowUserMenu] = useState(false);
-
-  const { user } = useAuth();
-
-  const displayName =
-    user?.user_metadata?.full_name ??
-    user?.user_metadata?.name ??
-    user?.email ??
-    '';
-  const displayEmail = user?.email ?? '';
-  const displayRole = user?.user_metadata?.role ?? 'ユーザー';
-
-  const handleSignOut = async () => {
-    setShowUserMenu(false);
-    await auth.signOut();
-    navigate('/login');
-  };
-
-  return (
-    <header className="bg-white border-b border-gray-200 h-16 flex items-center justify-between px-6 flex-shrink-0">
-      {/* 左側（将来的にパンくずなど） */}
-      <div />
-
-      {/* 右側: ユーザーメニューのみ */}
-      <div className="relative">
-        <button
-          onClick={() => setShowUserMenu(!showUserMenu)}
-          className="flex items-center gap-2 px-3 py-2 hover:bg-gray-100 rounded-lg transition-colors"
-        >
-          <div className="text-right">
-            <p className="text-sm font-medium text-gray-900 leading-tight">{displayName}</p>
-            <p className="text-xs text-gray-500 leading-tight">{displayRole}</p>
-          </div>
-          <ChevronDown size={14} className="text-gray-400" />
-        </button>
-
-        {/* ドロップダウンメニュー */}
-        {showUserMenu && (
-          <>
-            <div
-              className="fixed inset-0 z-40"
-              onClick={() => setShowUserMenu(false)}
-            />
-            <div className="absolute right-0 mt-2 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
-              <div className="px-4 py-3 border-b border-gray-200">
-                <p className="text-sm font-medium text-gray-900">{displayName}</p>
-                <p className="text-xs text-gray-500">{displayEmail}</p>
-              </div>
-              <Link
-                to="/settings"
-                onClick={() => setShowUserMenu(false)}
-                className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-              >
-                <Settings size={16} />
-                <span>設定</span>
-              </Link>
-              <button
-                onClick={handleSignOut}
-                className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50"
-              >
-                <LogOut size={16} />
-                <span>ログアウト</span>
-              </button>
+      {/* ユーザー情報（サイドバー下部に固定） */}
+      <div className="border-t border-gray-200 p-3 mt-auto">
+        <div className="relative">
+          <button onClick={() => setShowUserMenu(!showUserMenu)}
+            className="w-full flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-gray-100 transition-colors text-left">
+            <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center flex-shrink-0">
+              <User size={14} className="text-blue-600" />
             </div>
-          </>
-        )}
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-gray-900 truncate">{displayName}</p>
+              <p className="text-xs text-gray-500 truncate">{displayEmail}</p>
+            </div>
+            <ChevronDown size={14} className="text-gray-400 flex-shrink-0" />
+          </button>
+          {showUserMenu && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setShowUserMenu(false)} />
+              <div className="absolute bottom-full left-0 mb-2 w-full bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
+                <Link to="/settings" onClick={() => setShowUserMenu(false)}
+                  className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                  <Settings size={16} /><span>設定</span>
+                </Link>
+                <button onClick={handleSignOut}
+                  className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50">
+                  <LogOut size={16} /><span>ログアウト</span>
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
-    </header>
+    </aside>
   );
 }
 
@@ -466,13 +433,10 @@ interface LayoutProps {
 
 export default function Layout({ children }: LayoutProps) {
   return (
-    <div className="min-h-screen bg-gray-100 overflow-auto">
-      <div className="flex h-screen min-w-[1280px]">
+    <div className="h-screen bg-gray-100">
+      <div className="flex h-full min-w-[1280px]">
         <Sidebar />
-        <div className="flex-1 flex flex-col min-w-0 overflow-auto">
-          <Header />
-          <main className="flex-1 overflow-auto p-6">{children}</main>
-        </div>
+        <main className="flex-1 overflow-auto p-6">{children}</main>
       </div>
     </div>
   );
