@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ChevronDown, Search, Settings, Plus, Edit, Trash2, Percent } from 'lucide-react';
+import { ChevronDown, Search, Plus, Edit, Trash2, Percent } from 'lucide-react';
 import type { TaxCategory, Client } from '@/types';
 import Modal from '@/client/components/ui/Modal';
 import { supabase } from '@/client/lib/supabase';
@@ -200,15 +200,6 @@ export default function TaxCategoriesPage() {
     return rate ? `${rate.name} (${(rate.rate * 100).toFixed(0)}%)` : '-';
   };
 
-  const getTypeColor = (type: string) => {
-    switch (type) {
-      case '課税': return 'bg-blue-100 text-blue-700';
-      case '非課税': return 'bg-yellow-100 text-yellow-700';
-      case '不課税': return 'bg-gray-100 text-gray-700';
-      case '免税': return 'bg-green-100 text-green-700';
-      default: return 'bg-gray-100 text-gray-700';
-    }
-  };
   const getDirectionLabel = (cat: TaxCategory) => {
     if (cat.direction === 'その他') return '共通';
     if (cat.direction === '売上') return '収入';
