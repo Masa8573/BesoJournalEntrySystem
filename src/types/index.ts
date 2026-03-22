@@ -16,7 +16,7 @@ export interface User {
   name: string;
   email: string;
   password_hash: string;
-  role: 'admin' | 'accountant' | 'staff';
+  role: 'admin' | 'accountant' | 'accountant_manager' | 'accountant_staff' | 'staff';
   status: 'active' | 'inactive';
   last_login_at: string | null;
   created_at: string;

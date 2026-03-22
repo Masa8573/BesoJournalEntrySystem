@@ -383,7 +383,7 @@ export default function ExportPage() {
   }
 
   return (
-    <div className="flex flex-col -m-6">
+    <div className="flex flex-col">
       {currentWorkflow && <WorkflowHeader onBeforeNext={handleBeforeNext} nextLabel="集計チェックへ（完了）" />}
 
       <div className="flex-1 overflow-y-auto p-6">

@@ -33,7 +33,7 @@ export default function AccountsPage() {
   const [orgId, setOrgId] = useState<string | null>(null);
   const [userRole, setUserRole] = useState<string>('staff');
 
-  const canEdit = userRole === 'admin' || userRole === 'accountant';
+  const canEdit = userRole === 'admin' || userRole === 'accountant_manager';
   const canDelete = userRole === 'admin';
 
   const [formData, setFormData] = useState({
@@ -289,7 +289,7 @@ export default function AccountsPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 p-6">
       {/* ページヘッダー */}
       <div className="flex items-center justify-between">
         <div>

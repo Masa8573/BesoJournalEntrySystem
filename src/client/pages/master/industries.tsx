@@ -28,7 +28,7 @@ export default function IndustriesPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [userRole, setUserRole] = useState<string>('staff');
 
-  const canEdit = userRole === 'admin';
+  const canEdit = ['admin','accountant_manager','accountant_staff'].includes(userRole);
 
   const [formData, setFormData] = useState({
     code: '',
@@ -289,7 +289,7 @@ export default function IndustriesPage() {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 p-6">
       {/* ヘッダー */}
       <div className="flex items-center gap-4">
         <button onClick={() => navigate(-1)} className="p-2 hover:bg-gray-100 rounded-lg"><ArrowLeft size={20} className="text-gray-700" /></button>

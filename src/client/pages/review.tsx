@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   ZoomOut, ZoomIn, RotateCcw, ChevronLeft, ChevronRight,
-  ChevronDown, Ban, AlertCircle, Loader, CheckCircle, List, Eye, Search, Undo2,
+  ChevronDown, Ban, AlertCircle, Loader, CheckCircle, Eye, Search, Undo2,
 } from 'lucide-react';
 import { useWorkflow } from '@/client/context/WorkflowContext';
 import { useSearchParams } from 'react-router-dom';
@@ -257,15 +257,20 @@ export default function ReviewPage() {
         journal_entry_lines ( id, line_number, debit_credit, account_item_id, tax_category_id, amount, description,
           account_item:account_items(id, name), tax_category:tax_categories(id, name) )`)
       .eq('client_id', clientId).in('document_id', docIds)
-      .in('status', ['draft', 'approved', 'posted']).order('entry_date', { ascending: true });
+      .in('status', ['draft', 'approved', 'posted']);
 
-    const mappedEntries: EntryRow[] = (entriesData || []).map((entry: any) => {
+    // documentsの順序（アップロード順）に合わせてソート
+    const mappedEntries: EntryRow[] = docIds.map(docId => {
+      const entry = (entriesData || []).find((e: any) => e.document_id === docId);
+      if (!entry) return null;
       const dl = entry.journal_entry_lines?.find((l: any) => l.debit_credit === 'debit') || entry.journal_entry_lines?.[0];
       return { ...entry, lines: entry.journal_entry_lines || [],
         accountItemName: dl?.account_item?.name ?? (Array.isArray(dl?.account_item) ? dl.account_item[0]?.name : undefined),
         taxCategoryName: dl?.tax_category?.name ?? (Array.isArray(dl?.tax_category) ? dl.tax_category[0]?.name : undefined),
         amount: dl?.amount };
-    });
+    }).filter(Boolean) as unknown as EntryRow[];
+    // ソート統一（取引日→摘要）
+    mappedEntries.sort((a, b) => (a.entry_date || '').localeCompare(b.entry_date || '') || (a.description || '').localeCompare(b.description || ''));
     setEntries(mappedEntries);
 
     // 個別用
@@ -629,12 +634,6 @@ export default function ReviewPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleKeyDown]);
 
-  /*const groupedTaxCategories = useMemo(() => {
-    const g: Record<string, TaxCategory[]> = {};
-    taxCategories.forEach(tc => { const k = tc.direction || 'その他'; if (!g[k]) g[k] = []; g[k].push(tc); });
-    return g;
-  }, [taxCategories]);*/
-
   // ワークフロー次へ（仕訳出力に進む前に全件確定）
   const handleBeforeNext = async (): Promise<boolean> => {
     if (viewMode === 'detail') await saveCurrentItem(true);
@@ -684,7 +683,7 @@ export default function ReviewPage() {
     </div>
   );
   if (loading) return (
-    <div className="flex flex-col -m-6">
+    <div className="flex flex-col">
       <WorkflowHeader onBeforeNext={handleBeforeNext} nextLabel="仕訳出力へ" />
       <div className="flex-1 flex items-center justify-center p-6">
         <Loader size={32} className="animate-spin text-blue-500" /><span className="ml-3 text-gray-500">読み込み中...</span>
@@ -696,7 +695,7 @@ export default function ReviewPage() {
   // レンダリング
   // ============================================
   return (
-    <div className="flex flex-col bg-gray-50 -m-6">
+    <div className="flex flex-col bg-gray-50">
       <WorkflowHeader onBeforeNext={handleBeforeNext} nextLabel="仕訳出力へ" />
 
       {/* タブ */}
@@ -739,50 +738,52 @@ export default function ReviewPage() {
 
           {/* テーブル */}
           <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-            <div className="flex justify-between items-center px-4 py-3 border-b border-gray-200">
-              <h2 className="text-base font-semibold text-gray-900">仕訳一覧</h2>
-              {viewMode === 'list' ? (
+            {viewMode === 'list' && (
+              <div className="flex justify-between items-center px-4 py-3 border-b border-gray-200">
+                <h2 className="text-base font-semibold text-gray-900">仕訳一覧</h2>
                 <button onClick={openDetailFromTop}
                   className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-white transition-colors"
                   style={{ background: '#dc4a3a' }}>
                   <Eye size={16} /> 個別チェックに切り替え
                 </button>
-              ) : (
-                <button onClick={() => { saveCurrentItem(false); setViewMode('list'); loadAllData(); }}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-gray-600 border border-gray-300 bg-white hover:bg-gray-50">
-                  <List size={16} /> 一覧に戻る
-                </button>
-              )}
-            </div>
+              </div>
+            )}
 
-            <div className={viewMode === 'detail' ? '' : ''}>
+            <div>
               {viewMode === 'detail' ? (
-                /* W5: 個別チェック時のコンパクト一覧（3行表示、ヘッダーなし） */
-                <div className="max-h-[100px] overflow-y-auto">
-                  <table className="w-full">
-                    <tbody className="divide-y divide-gray-100">
-                      {filteredEntries.map((entry, idx) => {
-                        const isSelected = items[currentIndex]?.entryId === entry.id;
-                        const statusLabel = entry.is_excluded ? '対象外' : entry.status === 'approved' ? '確認済' : entry.status === 'posted' ? '確定' : '未確認';
-                        return (
-                          <tr key={entry.id} onClick={() => openDetail(entry.id)}
-                            className={`cursor-pointer text-xs transition-colors ${isSelected ? 'bg-blue-100 font-semibold' : 'hover:bg-gray-50'}`}>
-                            <td className="pl-3 pr-1 py-1.5 text-gray-400 w-8">{idx + 1}</td>
-                            <td className="px-1 py-1.5 text-gray-700 truncate max-w-[120px]">{entry.description || '-'}</td>
-                            <td className="px-1 py-1.5 text-gray-500">{entry.accountItemName || '-'}</td>
-                            <td className="px-1 py-1.5 text-right tabular-nums">{fmt(entry.amount)}</td>
-                            <td className="px-2 py-1.5 text-center">
-                              <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
-                                entry.status === 'approved' ? 'bg-green-100 text-green-700' :
-                                entry.status === 'posted' ? 'bg-purple-100 text-purple-700' :
-                                entry.is_excluded ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-500'
-                              }`}>{statusLabel}</span>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                /* 個別チェック時のコンパクト一覧（ヘッダーなし+右端に縦「一覧へ」） */
+                <div className="flex">
+                  <div className="flex-1 max-h-[90px] overflow-y-auto">
+                    <table className="w-full">
+                      <tbody className="divide-y divide-gray-100">
+                        {filteredEntries.map((entry, idx) => {
+                          const isSelected = items[currentIndex]?.entryId === entry.id;
+                          const statusLabel = entry.is_excluded ? '外' : entry.status === 'approved' ? '済' : entry.status === 'posted' ? '定' : '未';
+                          return (
+                            <tr key={entry.id} onClick={() => openDetail(entry.id)}
+                              className={`cursor-pointer text-xs transition-colors ${isSelected ? 'bg-blue-100 font-semibold' : 'hover:bg-gray-50'}`}>
+                              <td className="pl-3 pr-1 py-1 text-gray-400 w-6">{idx + 1}</td>
+                              <td className="px-1 py-1 text-gray-700 truncate max-w-[120px]">{entry.description || '-'}</td>
+                              <td className="px-1 py-1 text-gray-500 truncate max-w-[80px]">{entry.accountItemName || '-'}</td>
+                              <td className="px-1 py-1 text-right tabular-nums">{fmt(entry.amount)}</td>
+                              <td className="px-1 py-1 text-center">
+                                <span className={`text-[9px] px-1 py-0.5 rounded ${
+                                  entry.status === 'approved' ? 'bg-green-100 text-green-700' :
+                                  entry.status === 'posted' ? 'bg-purple-100 text-purple-700' :
+                                  entry.is_excluded ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-500'
+                                }`}>{statusLabel}</span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <button onClick={() => { saveCurrentItem(false); setViewMode('list'); loadAllData(); }}
+                    className="w-7 flex-shrink-0 bg-gray-100 hover:bg-gray-200 border-l border-gray-200 flex items-center justify-center transition-colors"
+                    title="一覧に戻る">
+                    <span className="text-[10px] font-medium text-gray-500" style={{ writingMode: 'vertical-rl' }}>一覧へ</span>
+                  </button>
                 </div>
               ) : (
                 /* 一覧モードのフルテーブル */

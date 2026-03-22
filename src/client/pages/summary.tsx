@@ -178,7 +178,7 @@ export default function SummaryPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-5xl mx-auto">
+    <div className="space-y-6 max-w-5xl mx-auto p-6">
       {/* ヘッダー */}
       <div className="flex items-center gap-4">
         <button onClick={() => navigate('/clients')} className="p-2 hover:bg-gray-100 rounded-lg">

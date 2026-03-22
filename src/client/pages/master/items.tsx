@@ -69,7 +69,7 @@ export default function ItemsPage() {
   const [orgId, setOrgId] = useState<string | null>(null);
   const [userRole, setUserRole] = useState<string>('staff');
 
-  const canEdit = userRole === 'admin' || userRole === 'accountant';
+  const canEdit = ['admin','accountant_manager','accountant_staff'].includes(userRole);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -260,7 +260,7 @@ export default function ItemsPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 p-6">
       {/* ヘッダー */}
       <div className="flex items-center gap-4">
         <button onClick={() => navigate(-1)} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">

@@ -48,8 +48,8 @@ export default function TaxCategoriesPage() {
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState<string>('staff');
 
-  const canEditTaxCat = userRole === 'admin'; // 税区分はadminのみ
-  const canEditSettings = userRole === 'admin' || userRole === 'accountant'; // 顧客別設定はaccountantも可
+  const canEditTaxCat = userRole === 'admin' || userRole === 'accountant_manager'; // 税区分はadminのみ
+  const canEditSettings = userRole === 'admin' || userRole === 'accountant_manager'; // 顧客別設定はaccountantも可
 
   // 税区分詳細モーダル
   const [showDetailModal, setShowDetailModal] = useState(false);
@@ -218,7 +218,7 @@ export default function TaxCategoriesPage() {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 p-6">
       {/* ヘッダー */}
       <div className="flex items-center justify-between">
         <div>

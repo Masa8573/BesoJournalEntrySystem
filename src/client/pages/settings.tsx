@@ -22,26 +22,32 @@ function formatDateTime(dateStr: string | null): string {
 
 function getRoleName(role: string): string {
   switch (role) {
-    case 'admin':      return '管理者';
-    case 'accountant': return '税理士';
-    case 'staff':      return '担当者';
-    default:           return role;
+    case 'admin':              return '管理者';
+    case 'accountant_manager': return '税理士(M)';
+    case 'accountant_staff':   return '税理士(S)';
+    case 'accountant':         return '税理士'; // 旧互換
+    case 'staff':              return '担当者';
+    default:                   return role;
   }
 }
 
 function getRoleIcon(role: string) {
   switch (role) {
-    case 'admin':      return <Shield size={16} className="text-red-600" />;
-    case 'accountant': return <UserCog size={16} className="text-blue-600" />;
-    default:           return <UserIcon size={16} className="text-gray-600" />;
+    case 'admin':              return <Shield size={16} className="text-red-600" />;
+    case 'accountant_manager': return <UserCog size={16} className="text-blue-600" />;
+    case 'accountant_staff':   return <UserCog size={16} className="text-cyan-600" />;
+    case 'accountant':         return <UserCog size={16} className="text-blue-600" />;
+    default:                   return <UserIcon size={16} className="text-gray-600" />;
   }
 }
 
 function getRoleBadgeClass(role: string): string {
   switch (role) {
-    case 'admin':      return 'bg-red-100 text-red-800';
-    case 'accountant': return 'bg-blue-100 text-blue-800';
-    default:           return 'bg-gray-100 text-gray-700';
+    case 'admin':              return 'bg-red-100 text-red-800';
+    case 'accountant_manager': return 'bg-blue-100 text-blue-800';
+    case 'accountant_staff':   return 'bg-cyan-100 text-cyan-800';
+    case 'accountant':         return 'bg-blue-100 text-blue-800';
+    default:                   return 'bg-gray-100 text-gray-700';
   }
 }
 
@@ -60,6 +66,7 @@ export default function SettingsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [showDetailPermissions, setShowDetailPermissions] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -68,7 +75,7 @@ export default function SettingsPage() {
     name: '',
     email: '',
     password: '',
-    role: 'accountant' as 'admin' | 'accountant' | 'staff',
+    role: 'accountant_manager' as 'admin' | 'accountant' | 'accountant_manager' | 'accountant_staff' | 'staff',
   });
 
   // ============================================
@@ -116,7 +123,7 @@ export default function SettingsPage() {
   };
 
   const resetForm = () => {
-    setFormData({ name: '', email: '', password: '', role: 'accountant' });
+    setFormData({ name: '', email: '', password: '', role: 'accountant_manager' });
   };
 
   // ============================================
@@ -207,7 +214,8 @@ export default function SettingsPage() {
   );
 
   const adminCount      = users.filter((u) => u.role === 'admin').length;
-  const accountantCount = users.filter((u) => u.role === 'accountant').length;
+  const accMgrCount     = users.filter((u) => u.role === 'accountant_manager' || u.role === 'accountant').length;
+  const accStaffCount   = users.filter((u) => u.role === 'accountant_staff').length;
   const staffCount      = users.filter((u) => u.role === 'staff').length;
 
   // ============================================
@@ -230,7 +238,7 @@ export default function SettingsPage() {
   // ============================================
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 p-6">
       {/* ページヘッダー */}
       <div className="flex items-center justify-between">
         <div>
@@ -246,22 +254,27 @@ export default function SettingsPage() {
       </div>
 
       {/* サマリーカード */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-4 gap-4">
         <div className="card">
           <div className="flex items-center gap-2 mb-2">
             <Shield size={20} className="text-red-600" />
             <h3 className="text-sm font-medium text-gray-600">管理者</h3>
           </div>
           <div className="text-3xl font-bold text-gray-900">{adminCount}</div>
-          <div className="text-xs text-gray-500 mt-1">名</div>
         </div>
         <div className="card">
           <div className="flex items-center gap-2 mb-2">
             <UserCog size={20} className="text-blue-600" />
-            <h3 className="text-sm font-medium text-gray-600">税理士</h3>
+            <h3 className="text-sm font-medium text-gray-600">税理士(M)</h3>
           </div>
-          <div className="text-3xl font-bold text-gray-900">{accountantCount}</div>
-          <div className="text-xs text-gray-500 mt-1">名</div>
+          <div className="text-3xl font-bold text-gray-900">{accMgrCount}</div>
+        </div>
+        <div className="card">
+          <div className="flex items-center gap-2 mb-2">
+            <UserCog size={20} className="text-cyan-600" />
+            <h3 className="text-sm font-medium text-gray-600">税理士(S)</h3>
+          </div>
+          <div className="text-3xl font-bold text-gray-900">{accStaffCount}</div>
         </div>
         <div className="card">
           <div className="flex items-center gap-2 mb-2">
@@ -269,7 +282,6 @@ export default function SettingsPage() {
             <h3 className="text-sm font-medium text-gray-600">担当者</h3>
           </div>
           <div className="text-3xl font-bold text-gray-900">{staffCount}</div>
-          <div className="text-xs text-gray-500 mt-1">名</div>
         </div>
       </div>
 
@@ -317,7 +329,7 @@ export default function SettingsPage() {
                   const isAdmin = user.role === 'admin';
                   return (
                     <tr key={user.id} className={`hover:bg-gray-50 transition-colors ${
-                      user.role === 'admin' ? 'bg-red-50/30' : user.role === 'accountant' ? 'bg-blue-50/30' : ''
+                      (user.role as string) === 'admin' ? 'bg-red-50/30' : (user.role as string) === 'accountant_manager' ? 'bg-blue-50/30' : (user.role as string) === 'accountant_staff' ? 'bg-cyan-50/30' : ''
                     }`}>
                       {/* 名前 */}
                       <td className="px-6 py-4 whitespace-nowrap">
@@ -382,40 +394,82 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* 権限説明 */}
+      {/* 権限説明（簡易版+詳細版切り替え） */}
       <div className="card bg-blue-50 border-blue-200">
-        <h3 className="text-sm font-medium text-blue-900 mb-3">権限の説明</h3>
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-blue-200">
-                <th className="text-left py-2 pr-3 font-semibold text-blue-800">機能</th>
-                <th className="text-center py-2 px-3 font-semibold text-red-700">管理者</th>
-                <th className="text-center py-2 px-3 font-semibold text-blue-700">税理士</th>
-                <th className="text-center py-2 px-3 font-semibold text-gray-600">担当者</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-blue-100">
-              {[
-                { fn: 'ユーザー管理', admin: true, accountant: false, staff: false },
-                { fn: '顧客管理', admin: true, accountant: true, staff: false },
-                { fn: 'マスタ管理（勘定科目・ルール等）', admin: true, accountant: true, staff: false },
-                { fn: '証憑アップロード', admin: true, accountant: true, staff: true },
-                { fn: 'OCR処理', admin: true, accountant: true, staff: true },
-                { fn: '仕訳確認・承認', admin: true, accountant: true, staff: false },
-                { fn: '仕訳出力', admin: true, accountant: true, staff: false },
-                { fn: '集計・レポート', admin: true, accountant: true, staff: false },
-              ].map(row => (
-                <tr key={row.fn}>
-                  <td className="py-1.5 pr-3 text-gray-700">{row.fn}</td>
-                  <td className="py-1.5 px-3 text-center">{row.admin ? '○' : '—'}</td>
-                  <td className="py-1.5 px-3 text-center">{row.accountant ? '○' : '—'}</td>
-                  <td className="py-1.5 px-3 text-center">{row.staff ? '○' : '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-medium text-blue-900">権限の説明</h3>
+          <button onClick={() => setShowDetailPermissions(!showDetailPermissions)}
+            className="text-xs text-blue-600 hover:underline">
+            {showDetailPermissions ? '簡易表示に戻す' : '詳しく見る'}
+          </button>
         </div>
+
+        {!showDetailPermissions ? (
+          /* 簡易版 */
+          <div className="space-y-2 text-sm">
+            {[
+              { role: '管理者', color: 'text-red-700', desc: 'すべての機能にアクセス可能。ユーザー管理・顧客削除の権限を持つ唯一のロール。' },
+              { role: '税理士(M)', color: 'text-blue-700', desc: '顧客管理+全マスタ編集+全ワークフロー操作。勘定科目・税区分の編集権限あり。' },
+              { role: '税理士(S)', color: 'text-cyan-700', desc: 'ワークフロー全般+業種・ルール・取引先・品目・タグのマスタ編集。勘定科目・税区分は閲覧のみ。' },
+              { role: '担当者', color: 'text-gray-600', desc: 'ワークフロー全般（アップロード〜仕訳出力）。マスタの編集権限なし。' },
+            ].map(item => (
+              <div key={item.role} className="flex items-start gap-2">
+                <span className={`font-semibold whitespace-nowrap ${item.color}`}>{item.role}</span>
+                <span className="text-gray-600">{item.desc}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          /* 詳細版 */
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-blue-200">
+                  <th className="text-left py-2 pr-3 font-semibold text-blue-800">機能</th>
+                  <th className="text-center py-2 px-2 font-semibold text-red-700">管理者</th>
+                  <th className="text-center py-2 px-2 font-semibold text-blue-700">税理士(M)</th>
+                  <th className="text-center py-2 px-2 font-semibold text-cyan-700">税理士(S)</th>
+                  <th className="text-center py-2 px-2 font-semibold text-gray-600">担当者</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-blue-100">
+                {[
+                  { fn: 'ユーザーの追加・削除', a: '○', m: '—', s: '—', st: '—' },
+                  { fn: '顧客の追加・編集', a: '○', m: '○', s: '—', st: '—' },
+                  { fn: '顧客の削除', a: '○', m: '—', s: '—', st: '—' },
+                  { fn: '証憑アップロード', a: '○', m: '○', s: '○', st: '○' },
+                  { fn: 'OCR処理の実行', a: '○', m: '○', s: '○', st: '○' },
+                  { fn: '仕訳確認（draft→approved）', a: '○', m: '○', s: '○', st: '○' },
+                  { fn: '仕訳確定（approved→posted）', a: '○', m: '○', s: '○', st: '○' },
+                  { fn: '仕訳差し戻し', a: '○', m: '○', s: '○', st: '○' },
+                  { fn: '仕訳出力（CSV/freee）', a: '○', m: '○', s: '○', st: '○' },
+                  { fn: 'ワークフロー完了', a: '○', m: '○', s: '○', st: '○' },
+                  { fn: '集計・レポート', a: '○', m: '○', s: '○', st: '○' },
+                  { fn: '--- マスタ管理 ---', a: '', m: '', s: '', st: '' },
+                  { fn: '勘定科目マスタ', a: '○', m: '○', s: '—', st: '—' },
+                  { fn: '税区分マスタ', a: '○', m: '○', s: '—', st: '—' },
+                  { fn: '業種マスタ', a: '○', m: '○', s: '○', st: '—' },
+                  { fn: '仕訳ルール管理', a: '○', m: '○', s: '○', st: '—' },
+                  { fn: '取引先マスタ', a: '○', m: '○', s: '○', st: '—' },
+                  { fn: '品目マスタ', a: '○', m: '○', s: '○', st: '—' },
+                  { fn: 'タグ管理', a: '○', m: '○', s: '○', st: '—' },
+                  { fn: '--- 申請制（将来実装）---', a: '', m: '', s: '', st: '' },
+                  { fn: 'ルール追加（仕訳確認画面から）', a: '○', m: '○', s: '申請', st: '申請' },
+                  { fn: '家事按分の変更', a: '○', m: '○', s: '申請', st: '申請' },
+                ].map(row => (
+                  <tr key={row.fn} className={row.fn.startsWith('---') ? 'bg-blue-100/50' : ''}>
+                    <td className={`py-1.5 pr-3 ${row.fn.startsWith('---') ? 'font-semibold text-blue-700 text-[10px]' : 'text-gray-700'}`}>{row.fn.replace(/---/g, '').trim()}</td>
+                    {[row.a, row.m, row.s, row.st].map((v, i) => (
+                      <td key={i} className={`py-1.5 px-2 text-center ${
+                        v === '○' ? 'text-green-600 font-medium' : v === '申請' ? 'text-yellow-600' : 'text-gray-300'
+                      }`}>{v}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* 新規登録・編集モーダル */}
@@ -484,9 +538,10 @@ export default function SettingsPage() {
             </label>
             <div className="space-y-2">
               {([
-                { value: 'admin',      icon: <Shield size={18} className="text-red-600" />,   label: '管理者',  desc: 'すべての機能にアクセス可能' },
-                { value: 'accountant', icon: <UserCog size={18} className="text-blue-600" />,  label: '税理士',  desc: '主要機能にアクセス可能' },
-                { value: 'staff',      icon: <UserIcon size={18} className="text-gray-600" />, label: '担当者',  desc: '限定的な機能にアクセス可能' },
+                { value: 'admin',              icon: <Shield size={18} className="text-red-600" />,   label: '管理者',    desc: 'ユーザー管理+全機能' },
+                { value: 'accountant_manager', icon: <UserCog size={18} className="text-blue-600" />,  label: '税理士(M)', desc: '顧客管理+全マスタ+全ワークフロー' },
+                { value: 'accountant_staff',   icon: <UserCog size={18} className="text-cyan-600" />,  label: '税理士(S)', desc: 'ワークフロー+一部マスタ編集' },
+                { value: 'staff',              icon: <UserIcon size={18} className="text-gray-600" />, label: '担当者',    desc: 'ワークフローのみ（マスタ編集不可）' },
               ] as const).map((opt) => (
                 <label
                   key={opt.value}

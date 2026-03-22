@@ -19,7 +19,7 @@ export default function TagsPage() {
   const [tags, setTags] = useState<Tag[]>([]);
   const [orgId, setOrgId] = useState<string | null>(null);
   const [userRole, setUserRole] = useState<string>('staff');
-  const canEdit = userRole === 'admin' || userRole === 'accountant';
+  const canEdit = ['admin','accountant_manager','accountant_staff'].includes(userRole);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<'all' | 'document' | 'journal_entry' | 'general'>('all');
   const [loading, setLoading] = useState(true);
@@ -125,7 +125,7 @@ export default function TagsPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 p-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">タグ管理</h1>
