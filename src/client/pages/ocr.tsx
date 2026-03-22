@@ -1,10 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { CheckCircle, AlertCircle, Loader, RotateCcw } from 'lucide-react';
 import { useWorkflow } from '@/client/context/WorkflowContext';
 import { supabase } from '@/client/lib/supabase';
 import { documentsApi } from '@/client/lib/api';
 import WorkflowHeader from '@/client/components/workflow/WorkflowHeader';
-
 
 // ============================================
 // 型定義
@@ -285,9 +284,19 @@ export default function OCRPage() {
   };
 
   // 全pending処理
-  const startOCRProcessing = () => {
+  const startOCRProcessing = useCallback(() => {
     runBatch(ocrResults.filter(r => r.status === 'pending'));
-  };
+  }, [ocrResults]);
+
+  // ショートカットキー
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key === 'Enter') { e.preventDefault(); startOCRProcessing(); }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [startOCRProcessing]);
 
   // 1件再処理
   const retryOne = (result: OCRResultItem) => {

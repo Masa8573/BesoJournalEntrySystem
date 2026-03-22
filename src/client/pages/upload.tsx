@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { Upload, X, CheckCircle, AlertCircle } from 'lucide-react';
 import { useDropzone } from 'react-dropzone';
 import { useWorkflow } from '@/client/context/WorkflowContext';
@@ -6,7 +6,6 @@ import { useAuth } from '@/client/main';
 import { supabase } from '@/client/lib/supabase';
 import { documentsApi } from '@/client/lib/api';
 import WorkflowHeader from '@/client/components/workflow/WorkflowHeader';
-
 
 interface UploadedFile {
   id: string;
@@ -78,11 +77,22 @@ export default function UploadPage() {
     setUploadedFiles((prev) => prev.filter((f) => f.id !== fileId));
   };
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+  const { getRootProps, getInputProps, isDragActive, open: openFileDialog } = useDropzone({
     onDrop,
     accept: { 'image/*': ['.png', '.jpg', '.jpeg'], 'application/pdf': ['.pdf'] },
     multiple: true,
+    noClick: false,
   });
+
+  // ショートカットキー
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key === 'u' || e.key === 'U') { e.preventDefault(); openFileDialog(); }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [openFileDialog]);
 
   const handleBeforeNext = async (): Promise<boolean> => {
     if (uploadedFiles.length === 0) { alert('証憑を1つ以上アップロードしてください'); return false; }

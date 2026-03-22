@@ -6,7 +6,6 @@ import { supabase } from '@/client/lib/supabase';
 import { accountItemsApi, taxCategoriesApi } from '@/client/lib/api';
 import WorkflowHeader from '@/client/components/workflow/WorkflowHeader';
 
-
 // ============================================
 // 型定義
 // ============================================
@@ -359,6 +358,17 @@ export default function ExportPage() {
     const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     downloadCsv(csv, `freee取込_${name}_${dateStr}.csv`);
   };
+
+  // ショートカットキー
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key === '1' && !e.ctrlKey && !e.altKey) { e.preventDefault(); handleSimpleCsvDownload(); }
+      if (e.key === '2' && !e.ctrlKey && !e.altKey) { e.preventDefault(); handleFreeeCsvDownload(); }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [filteredEntries, draftCount]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ワークフロー完了前の検証
   const handleBeforeNext = async (): Promise<boolean> => {

@@ -10,7 +10,6 @@ import { accountItemsApi, taxCategoriesApi } from '@/client/lib/api';
 import WorkflowHeader from '@/client/components/workflow/WorkflowHeader';
 import type { AccountItem, TaxCategory, Supplier } from '@/types';
 
-
 // ============================================
 // ComboBox（テキスト入力+キーワード検索+プルダウン選択+新規追加）
 // ============================================
@@ -599,34 +598,32 @@ export default function ReviewPage() {
   };
 
   // ============================================
-  // C5: ショートカットキー
-  // P: 事業用/プライベート切替
-  // R: ルール追加チェックボックス切替
-  // E: 対象外切替
-  // ←/→: 前へ/次へ（個別チェックモード時）
+  // C5: ショートカットキー（全面拡張）
   // ============================================
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    // input/textarea/select にフォーカスがある場合はスキップ
     const tag = (e.target as HTMLElement).tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
+    // --- 個別チェックモード ---
     if (viewMode === 'detail') {
-      if (e.key === 'p' || e.key === 'P') {
-        e.preventDefault();
-        setBusiness(!form.isBusiness);
-      } else if (e.key === 'r' || e.key === 'R') {
-        e.preventDefault();
-        setAddRule(prev => !prev);
-      } else if (e.key === 'e' || e.key === 'E') {
-        e.preventDefault();
-        toggleExclude();
-      } else if (e.key === 'ArrowRight' && currentIndex < items.length - 1) {
-        e.preventDefault();
-        goNext();
-      } else if (e.key === 'ArrowLeft' && currentIndex > 0) {
-        e.preventDefault();
-        goPrev();
-      }
+      if (e.key === 'p' || e.key === 'P') { e.preventDefault(); setBusiness(!form.isBusiness); }
+      else if (e.key === 'r' || e.key === 'R') { e.preventDefault(); setAddRule(prev => !prev); }
+      else if (e.key === 'e' || e.key === 'E') { e.preventDefault(); toggleExclude(); }
+      else if ((e.key === 'n' || e.key === 'N') && !e.shiftKey) { e.preventDefault(); goNext(); }
+      else if ((e.key === 'n' || e.key === 'N') && e.shiftKey) { e.preventDefault(); goPrev(); }
+      else if (e.key === 'Enter' && !e.ctrlKey) { e.preventDefault(); goNext(); }
+      else if (e.key === 'ArrowRight' && !e.altKey && currentIndex < items.length - 1) { e.preventDefault(); goNext(); }
+      else if (e.key === 'ArrowLeft' && !e.altKey && currentIndex > 0) { e.preventDefault(); goPrev(); }
+      else if (e.key === 'Escape') { e.preventDefault(); saveCurrentItem(false); setViewMode('list'); loadAllData(); }
+      else if (e.key === '+' || e.key === '=') { e.preventDefault(); setZoom(z => Math.min(300, z + 25)); }
+      else if (e.key === '-') { e.preventDefault(); setZoom(z => Math.max(25, z - 25)); }
+      else if (e.key === '0') { e.preventDefault(); setZoom(100); }
+      else if (e.key === 's' && e.ctrlKey) { e.preventDefault(); saveCurrentItem(false); }
+    }
+
+    // --- 一覧モード ---
+    if (viewMode === 'list') {
+      if (e.key === 'i' || e.key === 'I') { e.preventDefault(); openDetailFromTop(); }
     }
   }, [viewMode, form.isBusiness, currentIndex, items.length]);
 
