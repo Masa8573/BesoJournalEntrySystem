@@ -6,6 +6,7 @@ import { supabase } from '@/client/lib/supabase';
 import { accountItemsApi, taxCategoriesApi } from '@/client/lib/api';
 import WorkflowHeader from '@/client/components/workflow/WorkflowHeader';
 
+
 // ============================================
 // 型定義
 // ============================================

@@ -10,6 +10,7 @@ import { accountItemsApi, taxCategoriesApi } from '@/client/lib/api';
 import WorkflowHeader from '@/client/components/workflow/WorkflowHeader';
 import type { AccountItem, TaxCategory, Supplier } from '@/types';
 
+
 // ============================================
 // ComboBox（テキスト入力+キーワード検索+プルダウン選択+新規追加）
 // ============================================

@@ -4,6 +4,7 @@ import type { AccountItem, AccountCategory, TaxCategory } from '@/types';
 import Modal from '@/client/components/ui/Modal';
 import { supabase } from '@/client/lib/supabase';
 
+
 // 不動産賃貸業のindustry id（DB登録済み）
 const REAL_ESTATE_INDUSTRY_ID = 'b4124b27-de96-4675-87d9-6f08eccce3f6';
 

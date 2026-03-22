@@ -5,6 +5,7 @@ import { supabase } from '@/client/lib/supabase';
 import { useWorkflow } from '@/client/context/WorkflowContext';
 import type { Client, Industry } from '@/types';
 
+
 interface WorkflowLog {
   id: string;
   client_id: string;

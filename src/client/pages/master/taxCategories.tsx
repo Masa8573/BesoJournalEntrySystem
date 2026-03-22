@@ -4,6 +4,7 @@ import type { TaxCategory, Client } from '@/types';
 import Modal from '@/client/components/ui/Modal';
 import { supabase } from '@/client/lib/supabase';
 
+
 // ============================================
 // 型定義
 // ============================================

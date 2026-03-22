@@ -7,6 +7,7 @@ import { supabase } from '@/client/lib/supabase';
 import { documentsApi } from '@/client/lib/api';
 import WorkflowHeader from '@/client/components/workflow/WorkflowHeader';
 
+
 interface UploadedFile {
   id: string;
   file: File;

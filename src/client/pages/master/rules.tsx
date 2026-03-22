@@ -5,6 +5,7 @@ import type { Rule, Industry, Client, AccountItem, TaxCategory } from '@/types';
 import Modal from '@/client/components/ui/Modal';
 import { supabase } from '@/client/lib/supabase';
 
+
 // ============================================
 // メインコンポーネント
 // ============================================

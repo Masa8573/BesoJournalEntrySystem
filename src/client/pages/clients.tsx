@@ -7,6 +7,7 @@ import Modal from '@/client/components/ui/Modal';
 import { supabase } from '@/client/lib/supabase';
 import { workflowsApi } from '@/client/lib/workflowStorage';
 
+
 // workflowsテーブルから取得するための型（最小限）
 interface ActiveWorkflow {
   id: string;

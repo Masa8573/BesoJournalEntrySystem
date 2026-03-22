@@ -2,6 +2,7 @@
 // データベース型定義
 // ============================================
 
+
 export interface Organization {
   id: string;
   name: string;

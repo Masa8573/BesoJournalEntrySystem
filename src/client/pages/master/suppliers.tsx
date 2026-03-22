@@ -3,6 +3,7 @@ import { Plus, Edit, Trash2, Search, BadgeCheck } from 'lucide-react';
 import Modal from '@/client/components/ui/Modal';
 import { supabase } from '@/client/lib/supabase';
 
+
 interface Supplier {
   id: string;
   organization_id: string | null;
