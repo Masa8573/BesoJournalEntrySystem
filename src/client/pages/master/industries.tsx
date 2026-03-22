@@ -27,6 +27,7 @@ export default function IndustriesPage() {
   const [editingIndustry, setEditingIndustry] = useState<Industry | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [userRole, setUserRole] = useState<string>('staff');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const canEdit = ['admin','accountant_manager','accountant_staff'].includes(userRole);
 
@@ -289,7 +290,6 @@ export default function IndustriesPage() {
   );
 
   // 選択中の項目
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const selectedNode = useMemo(() => {
     const findNode = (nodes: IndustryNode[]): IndustryNode | null => {
       for (const n of nodes) {
