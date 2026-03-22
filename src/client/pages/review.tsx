@@ -231,6 +231,7 @@ export default function ReviewPage() {
   const [ruleSuggestion, setRuleSuggestion] = useState(''); // R11: ルール追加理由のプレビュー
   const [supplierText, setSupplierText] = useState(''); // R2: マスタにない取引先テキスト
   const [itemText, setItemText] = useState('');          // R3: マスタにない品目テキスト
+  const selectedRowRef = useRef<HTMLTableRowElement>(null); // 個別チェック時コンパクト一覧の自動スクロール用
 
   // ============================================
   // データ読み込み
@@ -356,8 +357,13 @@ export default function ReviewPage() {
       return updated;
     });
 
+    // ソート: 一覧（entries）と同じ順序に統一（取引日→摘要）
+    autoMatched.sort((a, b) =>
+      (a.entryDate || '').localeCompare(b.entryDate || '') ||
+      (a.description || '').localeCompare(b.description || '')
+    );
     setItems(autoMatched);
-    if (autoMatched.length > 0) setForm({ ...autoMatched[0] });
+    if (autoMatched.length > 0) { setCurrentIndex(0); setForm({ ...autoMatched[0] }); }
 
     setLoading(false);
   };
@@ -632,6 +638,13 @@ export default function ReviewPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleKeyDown]);
 
+  // 個別チェック時: 選択行への自動スクロール
+  useEffect(() => {
+    if (viewMode === 'detail' && selectedRowRef.current) {
+      selectedRowRef.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, [currentIndex, viewMode]);
+
   // ワークフロー次へ（仕訳出力に進む前に全件確定）
   const handleBeforeNext = async (): Promise<boolean> => {
     if (viewMode === 'detail') await saveCurrentItem(true);
@@ -758,7 +771,8 @@ export default function ReviewPage() {
                           const isSelected = items[currentIndex]?.entryId === entry.id;
                           const statusLabel = entry.is_excluded ? '外' : entry.status === 'approved' ? '済' : entry.status === 'posted' ? '定' : '未';
                           return (
-                            <tr key={entry.id} onClick={() => openDetail(entry.id)}
+                            <tr key={entry.id} ref={isSelected ? selectedRowRef : undefined}
+                              onClick={() => openDetail(entry.id)}
                               className={`cursor-pointer text-xs transition-colors ${isSelected ? 'bg-blue-100 font-semibold' : 'hover:bg-gray-50'}`}>
                               <td className="pl-3 pr-1 py-1 text-gray-400 w-6">{idx + 1}</td>
                               <td className="px-1 py-1 text-gray-700 truncate max-w-[120px]">{entry.description || '-'}</td>
