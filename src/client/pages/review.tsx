@@ -265,8 +265,8 @@ export default function ReviewPage() {
       if (!entry) return null;
       const dl = entry.journal_entry_lines?.find((l: any) => l.debit_credit === 'debit') || entry.journal_entry_lines?.[0];
       return { ...entry, lines: entry.journal_entry_lines || [],
-        accountItemName: dl?.account_item?.name ?? (Array.isArray(dl?.account_item) ? dl.account_item[0]?.name : undefined),
-        taxCategoryName: dl?.tax_category?.name ?? (Array.isArray(dl?.tax_category) ? dl.tax_category[0]?.name : undefined),
+        accountItemName: (() => { const ai = dl?.account_item as any; return Array.isArray(ai) ? ai[0]?.name : ai?.name; })(),
+        taxCategoryName: (() => { const tc = dl?.tax_category as any; return Array.isArray(tc) ? tc[0]?.name : tc?.name; })(),
         amount: dl?.amount };
     }).filter(Boolean) as unknown as EntryRow[];
     // ソート統一（取引日→摘要）
