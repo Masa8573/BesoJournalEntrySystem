@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect  } from 'react';
 import { Upload, X, CheckCircle, AlertCircle } from 'lucide-react';
 import { useDropzone } from 'react-dropzone';
 import { useWorkflow } from '@/client/context/WorkflowContext';
