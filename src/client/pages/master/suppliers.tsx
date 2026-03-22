@@ -3,7 +3,6 @@ import { Plus, Edit, Trash2, Search, BadgeCheck } from 'lucide-react';
 import Modal from '@/client/components/ui/Modal';
 import { supabase } from '@/client/lib/supabase';
 
-
 interface Supplier {
   id: string;
   organization_id: string | null;
@@ -15,8 +14,27 @@ interface Supplier {
   is_invoice_registered: boolean;
   is_active: boolean;
   notes: string | null;
+  category: string | null;
   created_at: string;
 }
+
+// カテゴリ定義
+const CATEGORIES: Array<{ key: string; label: string }> = [
+  { key: 'all', label: 'すべて' },
+  { key: 'fuel', label: '燃料' },
+  { key: 'vehicle', label: '車両・交通' },
+  { key: 'ec_retail', label: 'EC・小売' },
+  { key: 'streaming', label: '配信' },
+  { key: 'telecom', label: '通信・IT' },
+  { key: 'real_estate', label: '不動産' },
+  { key: 'insurance', label: '保険・金融' },
+  { key: 'logistics', label: '物流' },
+  { key: 'food', label: '飲食' },
+  { key: 'other', label: 'その他' },
+];
+
+// 50音インデックス
+const KANA_INDEX = ['あ','か','さ','た','な','は','ま','や','ら','わ','A-Z'];
 
 interface SupplierAlias {
   id: string;
@@ -38,6 +56,8 @@ function Switch({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 export default function SuppliersPage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [activeCategory, setActiveCategory] = useState('all');
+  const [activeKana, setActiveKana] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
@@ -55,6 +75,7 @@ export default function SuppliersPage() {
     code: '',
     invoice_number: '',
     is_invoice_registered: false,
+    category: 'other',
   });
 
   useEffect(() => { loadSuppliers(); }, []);
@@ -91,7 +112,7 @@ export default function SuppliersPage() {
     setActiveModalTab('info');
     setAliases([]);
     setNewAliasName('');
-    setFormData({ name: '', name_kana: '', code: '', invoice_number: '', is_invoice_registered: false });
+    setFormData({ name: '', name_kana: '', code: '', invoice_number: '', is_invoice_registered: false, category: 'other' });
     setShowModal(true);
   };
 
@@ -106,6 +127,7 @@ export default function SuppliersPage() {
       code: supplier.code || '',
       invoice_number: supplier.invoice_number || '',
       is_invoice_registered: supplier.is_invoice_registered,
+      category: supplier.category || 'other',
     });
     loadAliases(supplier.id);
     setShowModal(true);
@@ -119,6 +141,7 @@ export default function SuppliersPage() {
       code: formData.code || null,
       invoice_number: formData.invoice_number || null,
       is_invoice_registered: formData.is_invoice_registered,
+      category: formData.category || 'other',
       is_active: true,
     };
     if (!editingSupplier) data.organization_id = orgId;
@@ -173,7 +196,24 @@ export default function SuppliersPage() {
     s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     (s.name_kana?.toLowerCase().includes(searchQuery.toLowerCase()) ?? false) ||
     (s.invoice_number?.toLowerCase().includes(searchQuery.toLowerCase()) ?? false)
-  );
+  ).filter(s => activeCategory === 'all' || s.category === activeCategory)
+   .filter(s => {
+    if (!activeKana) return true;
+    const kana = s.name_kana || '';
+    if (activeKana === 'A-Z') return /^[a-zA-Z]/.test(s.name);
+    const kanaRanges: Record<string, [string, string]> = {
+      'あ': ['ぁ','お'], 'か': ['か','ご'], 'さ': ['さ','ぞ'], 'た': ['た','ど'],
+      'な': ['な','の'], 'は': ['は','ぽ'], 'ま': ['ま','も'], 'や': ['ゃ','よ'],
+      'ら': ['ら','ろ'], 'わ': ['ゎ','ん'],
+    };
+    const range = kanaRanges[activeKana];
+    if (!range) return true;
+    return kana >= range[0] && kana <= range[1];
+  });
+
+  // カテゴリごとの件数
+  const categoryCounts: Record<string, number> = { all: suppliers.length };
+  suppliers.forEach(s => { const c = s.category || 'other'; categoryCounts[c] = (categoryCounts[c] || 0) + 1; });
 
   if (loading) {
     return (
@@ -196,12 +236,39 @@ export default function SuppliersPage() {
         </button>
       </div>
 
+      {/* カテゴリタブ */}
+      <div className="flex flex-wrap gap-1.5">
+        {CATEGORIES.map(cat => (
+          <button key={cat.key} onClick={() => { setActiveCategory(cat.key); setActiveKana(null); }}
+            className={`px-3 py-1.5 text-xs rounded-full border transition-colors ${
+              activeCategory === cat.key
+                ? 'bg-blue-600 text-white border-blue-600'
+                : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+            }`}>
+            {cat.label}
+            <span className={`ml-1 ${activeCategory === cat.key ? 'text-blue-200' : 'text-gray-400'}`}>
+              {categoryCounts[cat.key] || 0}
+            </span>
+          </button>
+        ))}
+      </div>
+
       <div className="card">
-        <div className="border-b border-gray-200 pb-4 mb-4">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">取引先一覧</h2>
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-            <input type="text" placeholder="取引先名・読み仮名・インボイス番号で検索..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="input pl-10" />
+        <div className="border-b border-gray-200 pb-3 mb-3">
+          <div className="flex items-center gap-3">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+              <input type="text" placeholder="取引先名・読み仮名・インボイス番号で検索..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="input pl-10" />
+            </div>
+            {/* 50音インデックス */}
+            <div className="flex gap-0.5 flex-shrink-0">
+              {KANA_INDEX.map(k => (
+                <button key={k} onClick={() => setActiveKana(activeKana === k ? null : k)}
+                  className={`w-7 h-7 text-[10px] rounded transition-colors ${
+                    activeKana === k ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                  }`}>{k}</button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -209,25 +276,31 @@ export default function SuppliersPage() {
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">取引先名</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">読み仮名</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">インボイス番号</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">課税事業者</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">操作</th>
+                <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">取引先名</th>
+                <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">読み仮名</th>
+                <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">カテゴリ</th>
+                <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">インボイス番号</th>
+                <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500 uppercase">課税事業者</th>
+                <th className="px-4 py-2.5 text-right text-xs font-medium text-gray-500 uppercase">操作</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {filtered.length === 0 ? (
-                <tr><td colSpan={5} className="px-6 py-8 text-center text-gray-500">
+                <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-500">
                   {suppliers.length === 0 ? '取引先が登録されていません。「新規取引先」から追加してください。' : '検索条件に一致する取引先が見つかりませんでした'}
                 </td></tr>
               ) : (
-                filtered.map(supplier => (
+                filtered.map(supplier => {
+                  const catLabel = CATEGORIES.find(c => c.key === supplier.category)?.label || supplier.category || '-';
+                  return (
                   <tr key={supplier.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{supplier.name}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{supplier.name_kana || '-'}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 font-mono">{supplier.invoice_number || '-'}</td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">{supplier.name}</td>
+                    <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-600">{supplier.name_kana || '-'}</td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">{catLabel}</span>
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-600 font-mono">{supplier.invoice_number || '-'}</td>
+                    <td className="px-4 py-3 whitespace-nowrap">
                       {supplier.is_invoice_registered ? (
                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
                           <BadgeCheck size={12} />課税
@@ -236,7 +309,7 @@ export default function SuppliersPage() {
                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">未確認</span>
                       )}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right">
+                    <td className="px-4 py-3 whitespace-nowrap text-right">
                       <div className="flex items-center justify-end gap-2">
                         <button onClick={() => canEdit && handleOpenEditModal(supplier)} disabled={!canEdit}
                           className={`p-1 rounded ${canEdit ? 'text-gray-600 hover:text-blue-600 hover:bg-blue-50' : 'text-gray-300 cursor-not-allowed'}`}><Edit size={18} /></button>
@@ -245,7 +318,8 @@ export default function SuppliersPage() {
                       </div>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -303,6 +377,12 @@ export default function SuppliersPage() {
                 <input type="text" value={formData.invoice_number} onChange={e => setFormData({ ...formData, invoice_number: e.target.value })} className="input" placeholder="T1234567890123" />
               </div>
             )}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">カテゴリ</label>
+              <select value={formData.category} onChange={e => setFormData({ ...formData, category: e.target.value })} className="input">
+                {CATEGORIES.filter(c => c.key !== 'all').map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+              </select>
+            </div>
             <div className="flex justify-end gap-3 pt-4 border-t">
               <button type="button" onClick={() => { setShowModal(false); setEditingSupplier(null); }} className="btn-secondary">キャンセル</button>
               <button type="submit" className="btn-primary">{editingSupplier ? '更新する' : '登録する'}</button>

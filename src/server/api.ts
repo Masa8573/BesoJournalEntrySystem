@@ -324,12 +324,18 @@ router.post('/journal-entries/generate', async (req: Request, res: Response) => 
 
     // 2. マスタデータを取得
     console.log(`[仕訳生成] マスタデータ取得中... organization_id="${organizationId}"`);
-    const [accountItems, taxCategories, fallbackAccountId] = await Promise.all([
+    const [accountItems, taxCategories, fallbackAccountId, suppliersData, aliasesData, itemsData] = await Promise.all([
       fetchAccountItems(organizationId),
       fetchTaxCategories(),
       findFallbackAccountId(organizationId),
+      supabaseAdmin.from('suppliers').select('id, name').eq('organization_id', organizationId).eq('is_active', true),
+      supabaseAdmin.from('supplier_aliases').select('supplier_id, alias_name'),
+      supabaseAdmin.from('items').select('id, name').eq('is_active', true).or(`organization_id.eq.${organizationId},organization_id.is.null`),
     ]);
-    console.log(`[仕訳生成] マスタ: 勘定科目=${accountItems.length}件, 税区分=${taxCategories.length}件, 雑費ID="${fallbackAccountId}"`);
+    const suppliers = suppliersData.data || [];
+    const supplierAliases = aliasesData.data || [];
+    const itemsList = itemsData.data || [];
+    console.log(`[仕訳生成] マスタ: 勘定科目=${accountItems.length}件, 税区分=${taxCategories.length}件, 取引先=${suppliers.length}件, 品目=${itemsList.length}件`);
 
     // 2.5 ルールマッチング（B1: ルールが先、マッチしなければGemini）
     const supplierName = ocr_result.extracted_supplier || '不明';
@@ -422,12 +428,15 @@ router.post('/journal-entries/generate', async (req: Request, res: Response) => 
       console.log(`[仕訳生成] ✅ AI完了: category="${journalEntry.category}", lines=${journalEntry.lines.length}件, confidence=${journalEntry.confidence}`);
     }
 
-    // 4. UUID マッピング
+    // 4. UUID マッピング（取引先・品目マッチング含む）
     const mappedLines = mapLinesToDBFormat(
       journalEntry.lines,
       accountItems,
       taxCategories,
-      fallbackAccountId
+      fallbackAccountId,
+      suppliers,
+      supplierAliases,
+      itemsList
     );
     console.log(`[仕訳生成] ✅ UUIDマッピング完了: ${mappedLines.length}件`);
 
@@ -507,11 +516,17 @@ router.post('/process/batch', upload.array('files', 500), async (req: Request, r
       });
     }
 
-    const [accountItems, taxCategories, fallbackAccountId] = await Promise.all([
+    const [accountItems, taxCategories, fallbackAccountId, bSuppData, bAliasData, bItemsData] = await Promise.all([
       fetchAccountItems(organizationId),
       fetchTaxCategories(),
       findFallbackAccountId(organizationId),
+      supabaseAdmin.from('suppliers').select('id, name').eq('organization_id', organizationId).eq('is_active', true),
+      supabaseAdmin.from('supplier_aliases').select('supplier_id, alias_name'),
+      supabaseAdmin.from('items').select('id, name').eq('is_active', true).or(`organization_id.eq.${organizationId},organization_id.is.null`),
     ]);
+    const bSuppliers = bSuppData.data || [];
+    const bAliases = bAliasData.data || [];
+    const bItems = bItemsData.data || [];
 
     const results = [];
     for (const file of files) {
@@ -531,7 +546,7 @@ router.post('/process/batch', upload.array('files', 500), async (req: Request, r
           account_items: accountItems,
           tax_categories: taxCategories,
         });
-        const mappedLines = mapLinesToDBFormat(journalEntry.lines, accountItems, taxCategories, fallbackAccountId);
+        const mappedLines = mapLinesToDBFormat(journalEntry.lines, accountItems, taxCategories, fallbackAccountId, bSuppliers, bAliases, bItems);
         results.push({
           file_name: file.originalname,
           success: true,

@@ -255,6 +255,8 @@ export interface GeneratedJournalLine {
   tax_rate: number | null;
   tax_amount: number | null;
   description: string;
+  supplier_name?: string | null;
+  item_name?: string | null;
 }
 
 export interface GeneratedJournalEntry {
@@ -323,7 +325,9 @@ ${taxCategoryList}
       "amount": 金額（数値のみ）,
       "tax_rate": 税率（0.10 または 0.08 または 0 または null）,
       "tax_amount": 消費税額（数値のみ、不明ならnull）,
-      "description": "明細摘要"
+      "description": "明細摘要",
+      "supplier_name": "取引先名（証憑に記載されている企業名・店舗名）",
+      "item_name": "品目名（取引の内容を表す品目。例: 駐車場代、ガソリン、携帯電話料金）"
     }
   ]
 }
@@ -361,6 +365,8 @@ JSONのみを返してください。`;
       tax_rate: line.tax_rate ?? null,
       tax_amount: line.tax_amount != null ? Number(line.tax_amount) : null,
       description: line.description || '',
+      supplier_name: line.supplier_name || null,
+      item_name: line.item_name || null,
     }));
 
     if (lines.length === 0) {
@@ -688,7 +694,10 @@ export function mapLinesToDBFormat(
   lines: GeneratedJournalLine[],
   accountItems: AccountItemRef[],
   taxCategories: TaxCategoryRef[],
-  fallbackAccountId: string // 「雑費」のUUIDを呼び出し元から渡す
+  fallbackAccountId: string,
+  suppliers?: Array<{ id: string; name: string }>,
+  supplierAliases?: Array<{ supplier_id: string; alias_name: string }>,
+  items?: Array<{ id: string; name: string }>,
 ): Array<{
   line_number: number;
   debit_credit: 'debit' | 'credit';
@@ -698,6 +707,10 @@ export function mapLinesToDBFormat(
   tax_rate: number | null;
   tax_amount: number | null;
   description: string | null;
+  supplier_id: string | null;
+  item_id: string | null;
+  supplier_name_text: string | null;
+  item_name_text: string | null;
 }> {
   return lines.map((line) => {
     // 勘定科目名で検索（完全一致 → 部分一致フォールバック）
@@ -715,6 +728,34 @@ export function mapLinesToDBFormat(
         )
       : null;
 
+    // 取引先マッチング（名前→完全一致→部分一致→エイリアス）
+    let supplierId: string | null = null;
+    const sName = line.supplier_name;
+    if (sName && suppliers) {
+      const exact = suppliers.find(s => s.name === sName);
+      if (exact) { supplierId = exact.id; }
+      else {
+        const partial = suppliers.find(s => sName.includes(s.name) || s.name.includes(sName));
+        if (partial) { supplierId = partial.id; }
+        else if (supplierAliases) {
+          const alias = supplierAliases.find(a => sName.includes(a.alias_name) || a.alias_name.includes(sName));
+          if (alias) supplierId = alias.supplier_id;
+        }
+      }
+    }
+
+    // 品目マッチング（名前→完全一致→部分一致）
+    let itemId: string | null = null;
+    const iName = line.item_name;
+    if (iName && items) {
+      const exact = items.find(it => it.name === iName);
+      if (exact) { itemId = exact.id; }
+      else {
+        const partial = items.find(it => iName.includes(it.name) || it.name.includes(iName));
+        if (partial) itemId = partial.id;
+      }
+    }
+
     if (!account) {
       console.warn(`勘定科目が見つかりません: "${line.account_item_name}" → 雑費にフォールバック`);
     }
@@ -728,6 +769,10 @@ export function mapLinesToDBFormat(
       tax_rate: line.tax_rate,
       tax_amount: line.tax_amount,
       description: line.description || null,
+      supplier_id: supplierId,
+      item_id: itemId,
+      supplier_name_text: sName || null,
+      item_name_text: iName || null,
     };
   });
 }
