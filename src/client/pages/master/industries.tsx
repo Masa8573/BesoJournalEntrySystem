@@ -5,18 +5,12 @@ import { useNavigate } from 'react-router-dom';
 import Modal from '@/client/components/ui/Modal';
 import { supabase } from '@/client/lib/supabase';
 
-// ============================================
-// 型拡張
-// ============================================
 interface IndustryNode extends Industry {
   children: IndustryNode[];
   level: number;
   clientCount: number;
 }
 
-// ============================================
-// メインコンポーネント
-// ============================================
 export default function IndustriesPage() {
   const navigate = useNavigate();
   const [industries, setIndustries] = useState<Industry[]>([]);
@@ -32,10 +26,7 @@ export default function IndustriesPage() {
   const canEdit = ['admin','accountant_manager','accountant_staff'].includes(userRole);
 
   const [formData, setFormData] = useState({
-    code: '',
-    name: '',
-    description: '',
-    parent_id: '',
+    code: '', name: '', description: '', parent_id: '',
   });
 
   useEffect(() => { loadData(); }, []);
@@ -53,7 +44,6 @@ export default function IndustriesPage() {
     ]);
     if (indRes.data) {
       setIndustries(indRes.data as Industry[]);
-      // Level 1を初期展開
       const level1Ids = new Set((indRes.data as Industry[]).filter(i => !i.parent_id).map(i => i.id));
       setExpanded(level1Ids);
     }
@@ -61,32 +51,20 @@ export default function IndustriesPage() {
     setLoading(false);
   };
 
-  // ============================================
-  // ツリー構築
-  // ============================================
   const tree = useMemo(() => {
     const getClientCount = (id: string): number => {
       const direct = clients.filter(c => c.industry_id === id).length;
       const childIds = industries.filter(i => i.parent_id === id).map(i => i.id);
-      const childCount = childIds.reduce((sum, cid) => sum + getClientCount(cid), 0);
-      return direct + childCount;
+      return direct + childIds.reduce((sum, cid) => sum + getClientCount(cid), 0);
     };
-
     const buildTree = (parentId: string | null, level: number): IndustryNode[] => {
-      return industries
-        .filter(i => i.parent_id === parentId)
-        .map(i => ({
-          ...i,
-          level,
-          clientCount: getClientCount(i.id),
-          children: buildTree(i.id, level + 1),
-        }));
+      return industries.filter(i => i.parent_id === parentId).map(i => ({
+        ...i, level, clientCount: getClientCount(i.id), children: buildTree(i.id, level + 1),
+      }));
     };
-
     return buildTree(null, 0);
   }, [industries, clients]);
 
-  // フィルター
   const matchesSearch = (node: IndustryNode): boolean => {
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
@@ -95,54 +73,30 @@ export default function IndustriesPage() {
     return node.children.some(c => matchesSearch(c));
   };
 
-  // 展開/折りたたみ
   const toggleExpand = (id: string) => {
-    setExpanded(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
+    setExpanded(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   };
-
   const expandAll = () => setExpanded(new Set(industries.map(i => i.id)));
   const collapseAll = () => setExpanded(new Set());
 
-  // ============================================
-  // CRUD
-  // ============================================
   const handleOpenNewModal = (parentId = '') => {
     setEditingIndustry(null);
     setFormData({ code: '', name: '', description: '', parent_id: parentId });
     setShowModal(true);
   };
-
   const handleOpenEditModal = (industry: Industry) => {
     setEditingIndustry(industry);
-    setFormData({
-      code: industry.code,
-      name: industry.name,
-      description: industry.description || '',
-      parent_id: industry.parent_id || '',
-    });
+    setFormData({ code: industry.code, name: industry.name, description: industry.description || '', parent_id: industry.parent_id || '' });
     setShowModal(true);
   };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    // sort_order を親の子の数から自動計算
     const siblings = industries.filter(i => (i.parent_id || '') === formData.parent_id);
     const maxSort = siblings.reduce((max, s) => Math.max(max, s.sort_order), 0);
-
     const data = {
-      code: formData.code,
-      name: formData.name,
-      description: formData.description || null,
-      parent_id: formData.parent_id || null,
-      sort_order: editingIndustry ? editingIndustry.sort_order : maxSort + 1,
-      is_active: true,
+      code: formData.code, name: formData.name, description: formData.description || null,
+      parent_id: formData.parent_id || null, sort_order: editingIndustry ? editingIndustry.sort_order : maxSort + 1, is_active: true,
     };
-
     if (editingIndustry) {
       const { error } = await supabase.from('industries').update(data).eq('id', editingIndustry.id);
       if (error) { alert('更新に失敗しました: ' + error.message); return; }
@@ -152,27 +106,16 @@ export default function IndustriesPage() {
     }
     setShowModal(false); setEditingIndustry(null); loadData();
   };
-
   const handleDelete = async (industry: Industry) => {
     const childCount = industries.filter(i => i.parent_id === industry.id).length;
     const clientCount = clients.filter(c => c.industry_id === industry.id).length;
-
-    if (childCount > 0) {
-      alert(`この業種には${childCount}件の子項目があります。\n先に子項目を削除または移動してください。`);
-      return;
-    }
-    if (clientCount > 0) {
-      alert(`この業種は${clientCount}件の顧客に紐付いています。\n先に顧客の業種を変更してください。`);
-      return;
-    }
+    if (childCount > 0) { alert(`この業種には${childCount}件の子項目があります。\n先に子項目を削除してください。`); return; }
+    if (clientCount > 0) { alert(`この業種は${clientCount}件の顧客に紐付いています。\n先に顧客の業種を変更してください。`); return; }
     if (!window.confirm(`「${industry.name}」を削除しますか？`)) return;
-
     const { error } = await supabase.from('industries').update({ is_active: false }).eq('id', industry.id);
-    if (error) alert('削除に失敗しました: ' + error.message);
-    else loadData();
+    if (error) alert('削除に失敗しました: ' + error.message); else loadData();
   };
 
-  // レベルラベル
   const getLevelLabel = (parentId: string) => {
     if (!parentId) return '業界（Level 1）';
     const parent = industries.find(i => i.id === parentId);
@@ -180,7 +123,6 @@ export default function IndustriesPage() {
     return 'ジャンル（Level 3）';
   };
 
-  // 親の選択肢（Level 1 と Level 2 のみ）
   const parentOptions = useMemo(() => {
     const level1 = industries.filter(i => !i.parent_id);
     const options: Array<{ id: string; name: string; level: string }> = [];
@@ -193,7 +135,6 @@ export default function IndustriesPage() {
     return options;
   }, [industries]);
 
-  // サマリー
   const level1Count = industries.filter(i => !i.parent_id).length;
   const level2Count = industries.filter(i => i.parent_id && industries.find(p => p.id === i.parent_id && !p.parent_id)).length;
   const level3Count = industries.filter(i => {
@@ -202,94 +143,7 @@ export default function IndustriesPage() {
     return parent?.parent_id != null;
   }).length;
 
-  // ============================================
-  // ツリー行レンダリング
-  // ============================================
-  const renderRow = (node: IndustryNode): React.ReactNode => {
-    if (!matchesSearch(node)) return null;
-    const isExpanded = expanded.has(node.id);
-    const hasChildren = node.children.length > 0;
-    const indent = node.level * 24;
-
-    const levelColors = [
-      'font-bold text-gray-900',   // Level 0 (業界)
-      'font-semibold text-gray-800', // Level 1 (業種)
-      'text-gray-600',              // Level 2 (ジャンル)
-    ];
-
-    const levelBg = [
-      'bg-slate-100 border-l-4 border-l-indigo-500',   // Level 0 (業界) — 濃いグレー+紫ボーダー
-      'bg-blue-50/50 border-l-4 border-l-blue-300',    // Level 1 (業種) — 薄い青+青ボーダー
-      'bg-white border-l-4 border-l-gray-200',          // Level 2 (ジャンル) — 白+グレーボーダー
-    ];
-
-    const levelBadge = [
-      { label: '業界', cls: 'bg-indigo-100 text-indigo-700' },
-      { label: '業種', cls: 'bg-blue-100 text-blue-600' },
-      { label: 'ジャンル', cls: 'bg-gray-100 text-gray-500' },
-    ];
-
-    return (
-      <React.Fragment key={node.id}>
-        <tr className={`hover:bg-blue-50/30 transition-colors ${levelBg[node.level] || ''}`}>
-          <td className="px-4 py-2.5" style={{ paddingLeft: 16 + indent }}>
-            <div className="flex items-center gap-1.5">
-              {hasChildren ? (
-                <button onClick={() => toggleExpand(node.id)} className="p-0.5 hover:bg-gray-200 rounded">
-                  {isExpanded ? <ChevronDown size={14} className="text-gray-500" /> : <ChevronRight size={14} className="text-gray-500" />}
-                </button>
-              ) : (
-                <span className="w-5" />
-              )}
-              <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${levelBadge[node.level]?.cls || ''}`}>
-                {levelBadge[node.level]?.label}
-              </span>
-              <span className={`text-sm ${levelColors[node.level] || 'text-gray-600'}`}>{node.name}</span>
-            </div>
-          </td>
-          <td className="px-4 py-2.5 text-xs font-mono text-gray-400">{node.code}</td>
-          <td className="px-4 py-2.5 text-xs text-gray-500 max-w-[200px] truncate">{node.description || '-'}</td>
-          <td className="px-4 py-2.5 text-sm text-center">
-            {node.clientCount > 0 ? (
-              <span className="text-blue-600 font-medium">{node.clientCount}</span>
-            ) : (
-              <span className="text-gray-300">-</span>
-            )}
-          </td>
-          <td className="px-4 py-2.5 text-right">
-            <div className="flex items-center justify-end gap-0.5">
-              {node.level < 2 && (
-                <button onClick={() => canEdit && handleOpenNewModal(node.id)} disabled={!canEdit}
-                  className={`p-1.5 rounded ${canEdit ? 'text-green-600 hover:bg-green-50' : 'text-gray-300 cursor-not-allowed'}`} title="子項目を追加">
-                  <Plus size={14} />
-                </button>
-              )}
-              <button onClick={() => canEdit && handleOpenEditModal(node)} disabled={!canEdit}
-                className={`p-1.5 rounded ${canEdit ? 'text-blue-600 hover:bg-blue-50' : 'text-gray-300 cursor-not-allowed'}`} title="編集">
-                <Edit size={14} />
-              </button>
-              <button onClick={() => canEdit && handleDelete(node)} disabled={!canEdit}
-                className={`p-1.5 rounded ${canEdit ? 'text-red-600 hover:bg-red-50' : 'text-gray-300 cursor-not-allowed'}`} title="削除">
-                <Trash2 size={14} />
-              </button>
-            </div>
-          </td>
-        </tr>
-        {isExpanded && node.children.map(child => renderRow(child))}
-      </React.Fragment>
-    );
-  };
-
-  // ============================================
-  // レンダリング
-  // ============================================
-  if (loading) return (
-    <div className="flex items-center justify-center h-full">
-      <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
-    </div>
-  );
-
-  // 選択中の項目
+  // ★ selectedNode は early return の【前】に配置（Reactフックルール）
   const selectedNode = useMemo(() => {
     const findNode = (nodes: IndustryNode[]): IndustryNode | null => {
       for (const n of nodes) {
@@ -302,39 +156,42 @@ export default function IndustriesPage() {
     return selectedId ? findNode(tree) : null;
   }, [selectedId, tree]);
 
-  // 左ペインのツリーアイテムレンダリング
+  // ============================================
+  // ローディング（全フックの後に配置）
+  // ============================================
+  if (loading) return (
+    <div className="flex items-center justify-center h-full">
+      <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
+
+  // 左ペインのツリーアイテム
   const renderTreeItem = (node: IndustryNode): React.ReactNode => {
     if (!matchesSearch(node)) return null;
     const hasChildren = node.children.length > 0;
-    const isExpanded = expanded.has(node.id);
-    const isSelected = node.id === selectedId;
+    const isExp = expanded.has(node.id);
+    const isSel = node.id === selectedId;
     const indent = node.level * 16;
-
     return (
       <React.Fragment key={node.id}>
-        <div
-          onClick={() => setSelectedId(node.id)}
-          className={`flex items-center gap-1 px-2 py-1.5 cursor-pointer rounded-md transition-colors text-sm ${
-            isSelected ? 'bg-blue-100 text-blue-800 font-medium' : 'text-gray-700 hover:bg-gray-100'
-          }`}
-          style={{ paddingLeft: 8 + indent }}
-        >
+        <div onClick={() => setSelectedId(node.id)}
+          className={`flex items-center gap-1 px-2 py-1.5 cursor-pointer rounded-md transition-colors text-sm ${isSel ? 'bg-blue-100 text-blue-800 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}
+          style={{ paddingLeft: 8 + indent }}>
           {hasChildren ? (
             <button onClick={(e) => { e.stopPropagation(); toggleExpand(node.id); }} className="p-0.5">
-              {isExpanded ? <ChevronDown size={12} className="text-gray-400" /> : <ChevronRight size={12} className="text-gray-400" />}
+              {isExp ? <ChevronDown size={12} className="text-gray-400" /> : <ChevronRight size={12} className="text-gray-400" />}
             </button>
           ) : <span className="w-4" />}
           <span className="truncate">{node.name}</span>
           {node.clientCount > 0 && <span className="ml-auto text-[10px] text-blue-500 flex-shrink-0">{node.clientCount}</span>}
         </div>
-        {hasChildren && isExpanded && node.children.map(child => renderTreeItem(child))}
+        {hasChildren && isExp && node.children.map(child => renderTreeItem(child))}
       </React.Fragment>
     );
   };
 
   return (
     <div className="p-6 h-full flex flex-col">
-      {/* ヘッダー */}
       <div className="flex items-center gap-4 mb-4">
         <button onClick={() => navigate(-1)} className="p-2 hover:bg-gray-100 rounded-lg"><ArrowLeft size={20} className="text-gray-700" /></button>
         <div className="flex-1">
@@ -342,15 +199,11 @@ export default function IndustriesPage() {
           <p className="text-sm text-gray-500 mt-1">業界 → 業種 → ジャンルの3階層（{level1Count}業界 / {level2Count}業種 / {level3Count}ジャンル）</p>
         </div>
         {canEdit && (
-          <button onClick={() => handleOpenNewModal()} className="flex items-center gap-2 btn-primary">
-            <Plus size={18} /> 新規追加
-          </button>
+          <button onClick={() => handleOpenNewModal()} className="flex items-center gap-2 btn-primary"><Plus size={18} /> 新規追加</button>
         )}
       </div>
 
-      {/* 2ペインレイアウト */}
       <div className="flex-1 flex gap-4 min-h-0">
-        {/* 左ペイン: ツリー */}
         <div className="w-60 flex-shrink-0 bg-white rounded-lg border border-gray-200 flex flex-col">
           <div className="p-2 border-b border-gray-200">
             <div className="relative">
@@ -376,7 +229,6 @@ export default function IndustriesPage() {
           )}
         </div>
 
-        {/* 右ペイン: 詳細 */}
         <div className="flex-1 bg-white rounded-lg border border-gray-200 overflow-y-auto">
           {!selectedNode ? (
             <div className="flex items-center justify-center h-full text-gray-400">
@@ -387,77 +239,52 @@ export default function IndustriesPage() {
             </div>
           ) : (
             <div className="p-5">
-              {/* 選択中の項目ヘッダー */}
               <div className="flex items-center justify-between mb-4">
                 <div>
                   <div className="flex items-center gap-2">
                     <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
-                      selectedNode.level === 0 ? 'bg-blue-100 text-blue-700' :
-                      selectedNode.level === 1 ? 'bg-cyan-100 text-cyan-700' : 'bg-gray-100 text-gray-600'
-                    }`}>
-                      {selectedNode.level === 0 ? '業界' : selectedNode.level === 1 ? '業種' : 'ジャンル'}
-                    </span>
+                      selectedNode.level === 0 ? 'bg-blue-100 text-blue-700' : selectedNode.level === 1 ? 'bg-cyan-100 text-cyan-700' : 'bg-gray-100 text-gray-600'
+                    }`}>{selectedNode.level === 0 ? '業界' : selectedNode.level === 1 ? '業種' : 'ジャンル'}</span>
                     <h2 className="text-lg font-bold text-gray-900">{selectedNode.name}</h2>
                     <span className="text-xs font-mono text-gray-400">{selectedNode.code}</span>
                   </div>
-                  {selectedNode.description && (
-                    <p className="text-sm text-gray-600 mt-1">{selectedNode.description}</p>
-                  )}
+                  {selectedNode.description && <p className="text-sm text-gray-600 mt-1">{selectedNode.description}</p>}
                 </div>
                 {canEdit && (
                   <div className="flex gap-1.5">
                     {selectedNode.level < 2 && (
                       <button onClick={() => handleOpenNewModal(selectedNode.id)}
                         className="flex items-center gap-1 px-3 py-1.5 text-xs bg-green-50 text-green-700 border border-green-200 rounded-lg hover:bg-green-100">
-                        <Plus size={14} />子項目を追加
-                      </button>
+                        <Plus size={14} />子項目を追加</button>
                     )}
                     <button onClick={() => handleOpenEditModal(selectedNode)}
                       className="flex items-center gap-1 px-3 py-1.5 text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded-lg hover:bg-blue-100">
-                      <Edit size={14} />編集
-                    </button>
+                      <Edit size={14} />編集</button>
                     <button onClick={() => handleDelete(selectedNode)}
                       className="flex items-center gap-1 px-3 py-1.5 text-xs bg-red-50 text-red-700 border border-red-200 rounded-lg hover:bg-red-100">
-                      <Trash2 size={14} />削除
-                    </button>
+                      <Trash2 size={14} />削除</button>
                   </div>
                 )}
               </div>
 
-              {/* 統計 */}
               <div className="grid grid-cols-3 gap-3 mb-5">
-                <div className="bg-gray-50 rounded-lg p-3">
-                  <div className="text-xl font-bold text-gray-900">{selectedNode.children.length}</div>
-                  <div className="text-xs text-gray-500">子項目</div>
-                </div>
-                <div className="bg-blue-50 rounded-lg p-3">
-                  <div className="text-xl font-bold text-blue-600">{selectedNode.clientCount}</div>
-                  <div className="text-xs text-gray-500">紐づき顧客</div>
-                </div>
-                <div className="bg-gray-50 rounded-lg p-3">
-                  <div className="text-xl font-bold text-gray-600">{selectedNode.level}</div>
-                  <div className="text-xs text-gray-500">レベル</div>
-                </div>
+                <div className="bg-gray-50 rounded-lg p-3"><div className="text-xl font-bold text-gray-900">{selectedNode.children.length}</div><div className="text-xs text-gray-500">子項目</div></div>
+                <div className="bg-blue-50 rounded-lg p-3"><div className="text-xl font-bold text-blue-600">{selectedNode.clientCount}</div><div className="text-xs text-gray-500">紐づき顧客</div></div>
+                <div className="bg-gray-50 rounded-lg p-3"><div className="text-xl font-bold text-gray-600">{selectedNode.level}</div><div className="text-xs text-gray-500">レベル</div></div>
               </div>
 
-              {/* 子項目一覧（カード表示） */}
               {selectedNode.children.length > 0 && (
                 <div>
-                  <h3 className="text-sm font-semibold text-gray-700 mb-3">
-                    {selectedNode.level === 0 ? '業種' : 'ジャンル'}一覧
-                  </h3>
+                  <h3 className="text-sm font-semibold text-gray-700 mb-3">{selectedNode.level === 0 ? '業種' : 'ジャンル'}一覧</h3>
                   <div className="grid grid-cols-2 gap-3">
                     {selectedNode.children.map(child => (
-                      <div key={child.id}
-                        onClick={() => { setSelectedId(child.id); setExpanded(prev => new Set([...prev, selectedNode.id])); }}
+                      <div key={child.id} onClick={() => { setSelectedId(child.id); setExpanded(prev => new Set([...prev, selectedNode.id])); }}
                         className="border border-gray-200 rounded-lg p-3 hover:border-blue-300 hover:bg-blue-50/30 cursor-pointer transition-colors">
                         <div className="flex items-center justify-between mb-1">
                           <span className="font-medium text-sm text-gray-900">{child.name}</span>
                           <span className="text-[10px] font-mono text-gray-400">{child.code}</span>
                         </div>
-                        {child.description && (
-                          <p className="text-xs text-gray-500 line-clamp-2">{child.description}</p>
-                        )}
+                        {child.description && <p className="text-xs text-gray-500 line-clamp-2">{child.description}</p>}
                         <div className="flex items-center gap-3 mt-2 text-[10px] text-gray-400">
                           {child.children.length > 0 && <span>{child.children.length}子項目</span>}
                           {child.clientCount > 0 && <span className="text-blue-500">{child.clientCount}顧客</span>}
@@ -468,12 +295,10 @@ export default function IndustriesPage() {
                 </div>
               )}
 
-              {/* 子項目がない場合 */}
               {selectedNode.children.length === 0 && selectedNode.level < 2 && canEdit && (
                 <div className="text-center py-8 text-gray-400">
                   <p className="text-sm mb-2">子項目がまだありません</p>
-                  <button onClick={() => handleOpenNewModal(selectedNode.id)}
-                    className="text-sm text-blue-600 hover:underline">+ 子項目を追加</button>
+                  <button onClick={() => handleOpenNewModal(selectedNode.id)} className="text-sm text-blue-600 hover:underline">+ 子項目を追加</button>
                 </div>
               )}
             </div>
@@ -481,7 +306,6 @@ export default function IndustriesPage() {
         </div>
       </div>
 
-      {/* モーダル */}
       <Modal isOpen={showModal} onClose={() => { setShowModal(false); setEditingIndustry(null); }}
         title={editingIndustry ? `編集: ${editingIndustry.name}` : `新規追加（${getLevelLabel(formData.parent_id)}）`} size="md">
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -489,9 +313,7 @@ export default function IndustriesPage() {
             <label className="block text-sm font-medium text-gray-700 mb-1">親項目</label>
             <select value={formData.parent_id} onChange={e => setFormData(p => ({ ...p, parent_id: e.target.value }))} className="input">
               <option value="">なし（業界として登録）</option>
-              {parentOptions.map(o => (
-                <option key={o.id} value={o.id}>{o.level === '業界' ? `📁 ${o.name}` : o.name}</option>
-              ))}
+              {parentOptions.map(o => (<option key={o.id} value={o.id}>{o.level === '業界' ? `📁 ${o.name}` : o.name}</option>))}
             </select>
           </div>
           <div className="grid grid-cols-2 gap-4">
