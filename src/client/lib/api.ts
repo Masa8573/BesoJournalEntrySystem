@@ -4,7 +4,6 @@ import type {
   Industry,
   AccountItem,
   TaxCategory,
-  Tag,
   Rule,
   Document,
   JournalEntry,
@@ -136,34 +135,6 @@ export const taxCategoriesApi = {
 
   delete: (id: string) => handleResponse<void>(
     supabase.from('tax_categories').delete().eq('id', id)
-  ),
-};
-
-// ============================================
-// タグAPI
-// ③ organization_id, client_id, is_active を扱えるように修正
-//   status フィールドへの参照を削除
-// ============================================
-
-export const tagsApi = {
-  getAll: () => handleResponse<Tag[]>(
-    supabase.from('tags').select('*').order('created_at', { ascending: false })
-  ),
-
-  getById: (id: string) => handleResponse<Tag>(
-    supabase.from('tags').select('*').eq('id', id).single()
-  ),
-
-  create: (data: Omit<Partial<Tag>, 'status'>) => handleResponse<Tag>(
-    supabase.from('tags').insert(data).select().single()
-  ),
-
-  update: (id: string, data: Omit<Partial<Tag>, 'status'>) => handleResponse<Tag>(
-    supabase.from('tags').update(data).eq('id', id).select().single()
-  ),
-
-  delete: (id: string) => handleResponse<void>(
-    supabase.from('tags').delete().eq('id', id)
   ),
 };
 

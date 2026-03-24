@@ -32,9 +32,9 @@ export default function AccountsPage() {
   const [editingItem, setEditingItem] = useState<AccountItem | null>(null);
   const [expandedDescription, setExpandedDescription] = useState<string | null>(null);
   const [orgId, setOrgId] = useState<string | null>(null);
-  const [userRole, setUserRole] = useState<string>('staff');
+  const [userRole, setUserRole] = useState<string>('viewer');
 
-  const canEdit = userRole === 'admin' || userRole === 'accountant_manager';
+  const canEdit = userRole === 'admin' || userRole === 'manager';
   const canDelete = userRole === 'admin';
 
   const [formData, setFormData] = useState({

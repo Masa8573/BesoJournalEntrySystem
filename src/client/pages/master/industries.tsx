@@ -20,10 +20,10 @@ export default function IndustriesPage() {
   const [showModal, setShowModal] = useState(false);
   const [editingIndustry, setEditingIndustry] = useState<Industry | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [userRole, setUserRole] = useState<string>('staff');
+  const [userRole, setUserRole] = useState<string>('viewer');
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const canEdit = ['admin','accountant_manager','accountant_staff'].includes(userRole);
+  const canEdit = ['admin','manager','operator'].includes(userRole);
 
   const [formData, setFormData] = useState({
     code: '', name: '', description: '', parent_id: '',

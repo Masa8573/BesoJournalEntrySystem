@@ -10,7 +10,6 @@ import {
   FileX,
   Settings,
   List,
-  Tag,
   Receipt,
   Briefcase,
   Building2,
@@ -98,7 +97,6 @@ function Sidebar() {
       items: [
         { label: '取引先',   icon: <Store size={16} />,   path: '/master/suppliers' },
         { label: '品目',     icon: <Package size={16} />, path: '/master/items' },
-        { label: 'タグ一覧', icon: <Tag size={16} />,     path: '/master/tags' },
       ],
     },
     {

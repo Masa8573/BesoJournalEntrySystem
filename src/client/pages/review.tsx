@@ -208,8 +208,6 @@ export default function ReviewPage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [industries, setIndustries] = useState<Array<{ id: string; name: string }>>([]);
   const [itemsMaster, setItemsMaster] = useState<Array<{ id: string; name: string; code: string | null }>>([]);
-  const [tags, setTags] = useState<Array<{ id: string; name: string; tag_type: string }>>([]);
-  const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [businessRatio, setBusinessRatio] = useState(100); // W2: デフォルト100%（家事按分なし）
   const [clientRatios, setClientRatios] = useState<Array<{ account_item_id: string; business_ratio: number }>>([]);
   const [loading, setLoading] = useState(true);
@@ -316,10 +314,6 @@ export default function ReviewPage() {
     // C6: 品目マスタ取得
     const { data: itemsData } = await supabase.from('items').select('id, name, code').eq('is_active', true).order('name');
     if (itemsData) setItemsMaster(itemsData);
-
-    // C6: タグ取得（journal_entry/general タイプ）
-    const { data: tagsData } = await supabase.from('tags').select('id, name, tag_type').eq('is_active', true).in('tag_type', ['journal_entry', 'general']).order('name');
-    if (tagsData) setTags(tagsData);
 
     // C1: 家事按分率取得（現在の顧客の按分設定）
     if (currentWorkflow?.clientId) {
@@ -481,17 +475,6 @@ export default function ReviewPage() {
       }]);
     }
 
-    // C6: タグ書き戻し（journal_entry_tags）
-    if (entryId && selectedTagIds.length > 0) {
-      // 既存タグを削除して再挿入（シンプルな差し替え方式）
-      await supabase.from('journal_entry_tags').delete().eq('journal_entry_id', entryId);
-      const tagInserts = selectedTagIds.map(tagId => ({ journal_entry_id: entryId, tag_id: tagId }));
-      await supabase.from('journal_entry_tags').insert(tagInserts);
-    } else if (entryId && selectedTagIds.length === 0) {
-      // タグを全削除
-      await supabase.from('journal_entry_tags').delete().eq('journal_entry_id', entryId);
-    }
-
     // C1: 家事按分率の保存（按分率が100%未満の場合）
     if (!form.isExcluded && form.accountItemId && businessRatio < 100 && currentWorkflow?.clientId) {
       const { data: clientData } = await supabase.from('clients').select('organization_id').eq('id', currentWorkflow.clientId).single();
@@ -535,8 +518,7 @@ export default function ReviewPage() {
     if (currentIndex < items.length - 1) {
       const next = currentIndex + 1;
       setCurrentIndex(next); setForm({ ...items[next] }); setSavedAt(null); setAddRule(false); setRuleIndustryId(''); setRotation(0);
-      setSelectedTagIds([]); setBusinessRatio(100); setAiOriginalForm({}); setSupplierText(""); setItemText(""); setRuleSuggestion(""); // リセット
-      loadTagsForEntry(items[next].entryId);
+      setBusinessRatio(100); setAiOriginalForm({}); setSupplierText(""); setItemText(""); setRuleSuggestion(""); // リセット
     }
   };
   const goPrev = async () => {
@@ -544,17 +526,10 @@ export default function ReviewPage() {
     if (currentIndex > 0) {
       const prev = currentIndex - 1;
       setCurrentIndex(prev); setForm({ ...items[prev] }); setSavedAt(null); setAddRule(false); setRuleIndustryId(''); setRotation(0);
-      setSelectedTagIds([]); setBusinessRatio(100); setAiOriginalForm({}); setSupplierText(""); setItemText(""); setRuleSuggestion(""); // リセット
-      loadTagsForEntry(items[prev].entryId);
+      setBusinessRatio(100); setAiOriginalForm({}); setSupplierText(""); setItemText(""); setRuleSuggestion(""); // リセット
     }
   };
 
-  // C6: 既存タグをロード
-  const loadTagsForEntry = async (entryId: string | null) => {
-    if (!entryId) { setSelectedTagIds([]); return; }
-    const { data } = await supabase.from('journal_entry_tags').select('tag_id').eq('journal_entry_id', entryId);
-    if (data) setSelectedTagIds(data.map((d: any) => d.tag_id));
-  };
 
   // 事業用/プライベート/対象外
   // AI初期値を保持（事業用↔プライベート切替で復元用）
@@ -1072,27 +1047,6 @@ export default function ReviewPage() {
                             </div>
                           </div>
                         )}
-                      </div>
-                    )}
-
-                    {/* C6: タグ */}
-                    {tags.length > 0 && (
-                      <div>
-                        <label className="text-xs font-semibold mb-1.5 block">タグ</label>
-                        <div className="flex flex-wrap gap-1.5">
-                          {tags.map(tag => {
-                            const isSelected = selectedTagIds.includes(tag.id);
-                            return (
-                              <button key={tag.id} type="button"
-                                onClick={() => setSelectedTagIds(prev => isSelected ? prev.filter(id => id !== tag.id) : [...prev, tag.id])}
-                                className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${
-                                  isSelected ? 'bg-blue-100 border-blue-300 text-blue-700 font-medium' : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
-                                }`}>
-                                {tag.name}
-                              </button>
-                            );
-                          })}
-                        </div>
                       </div>
                     )}
 

@@ -21,7 +21,6 @@ import LoginPage from './pages/login';
 // マスタ登録コンポーネント
 import RulesPage from './pages/master/rules';
 import AccountsPage from './pages/master/accounts';
-import TagsPage from './pages/master/tags';
 import TaxCategoriesPage from './pages/master/taxCategories';
 import IndustriesPage from './pages/master/industries';
 import SuppliersPage from './pages/master/suppliers';
@@ -141,7 +140,6 @@ function App() {
                       {/* マスタ管理 */}
                       <Route path="/master/rules" element={<RulesPage />} />
                       <Route path="/master/accounts" element={<AccountsPage />} />
-                      <Route path="/master/tags" element={<TagsPage />} />
                       <Route path="/master/tax-categories" element={<TaxCategoriesPage />} />
                       <Route path="/master/industries" element={<IndustriesPage />} />
                       <Route path="/master/suppliers" element={<SuppliersPage />} />

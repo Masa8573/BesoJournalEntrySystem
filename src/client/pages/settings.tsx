@@ -23,32 +23,30 @@ function formatDateTime(dateStr: string | null): string {
 
 function getRoleName(role: string): string {
   switch (role) {
-    case 'admin':              return '管理者';
-    case 'accountant_manager': return '税理士(M)';
-    case 'accountant_staff':   return '税理士(S)';
-    case 'accountant':         return '税理士'; // 旧互換
-    case 'staff':              return '担当者';
-    default:                   return role;
+    case 'admin':    return '管理者';
+    case 'manager':  return 'マネージャー';
+    case 'operator': return '担当者';
+    case 'viewer':   return '閲覧者';
+    default:         return role;
   }
 }
 
 function getRoleIcon(role: string) {
   switch (role) {
-    case 'admin':              return <Shield size={16} className="text-red-600" />;
-    case 'accountant_manager': return <UserCog size={16} className="text-blue-600" />;
-    case 'accountant_staff':   return <UserCog size={16} className="text-cyan-600" />;
-    case 'accountant':         return <UserCog size={16} className="text-blue-600" />;
-    default:                   return <UserIcon size={16} className="text-gray-600" />;
+    case 'admin':    return <Shield size={16} className="text-red-600" />;
+    case 'manager':  return <UserCog size={16} className="text-blue-600" />;
+    case 'operator': return <UserCog size={16} className="text-cyan-600" />;
+    case 'viewer':   return <UserIcon size={16} className="text-gray-600" />;
   }
 }
 
 function getRoleBadgeClass(role: string): string {
   switch (role) {
-    case 'admin':              return 'bg-red-100 text-red-800';
-    case 'accountant_manager': return 'bg-blue-100 text-blue-800';
-    case 'accountant_staff':   return 'bg-cyan-100 text-cyan-800';
-    case 'accountant':         return 'bg-blue-100 text-blue-800';
-    default:                   return 'bg-gray-100 text-gray-700';
+    case 'admin':    return 'bg-red-100 text-red-800';
+    case 'manager':  return 'bg-blue-100 text-blue-800';
+    case 'operator': return 'bg-cyan-100 text-cyan-800';
+    case 'viewer':   return 'bg-gray-100 text-gray-800';
+    default:         return role;
   }
 }
 
@@ -76,7 +74,7 @@ export default function SettingsPage() {
     name: '',
     email: '',
     password: '',
-    role: 'accountant_manager' as 'admin' | 'accountant' | 'accountant_manager' | 'accountant_staff' | 'staff',
+    role: 'operator' as 'admin' | 'manager' | 'operator' | 'viewer',
   });
 
   // ============================================
@@ -124,7 +122,7 @@ export default function SettingsPage() {
   };
 
   const resetForm = () => {
-    setFormData({ name: '', email: '', password: '', role: 'accountant_manager' });
+    setFormData({ name: '', email: '', password: '', role: 'operator' });
   };
 
   // ============================================
@@ -214,10 +212,10 @@ export default function SettingsPage() {
     u.email.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const adminCount      = users.filter((u) => u.role === 'admin').length;
-  const accMgrCount     = users.filter((u) => u.role === 'accountant_manager' || u.role === 'accountant').length;
-  const accStaffCount   = users.filter((u) => u.role === 'accountant_staff').length;
-  const staffCount      = users.filter((u) => u.role === 'staff').length;
+  const adminCount    = users.filter((u) => u.role === 'admin').length;
+  const managerCount  = users.filter((u) => u.role === 'manager').length;
+  const operatorCount = users.filter((u) => u.role === 'operator').length;
+  const viewerCount   = users.filter((u) => u.role === 'viewer').length;
 
   // ============================================
   // ローディング
@@ -268,21 +266,21 @@ export default function SettingsPage() {
             <UserCog size={20} className="text-blue-600" />
             <h3 className="text-sm font-medium text-gray-600">税理士(M)</h3>
           </div>
-          <div className="text-3xl font-bold text-gray-900">{accMgrCount}</div>
+          <div className="text-3xl font-bold text-gray-900">{managerCount}</div>
         </div>
         <div className="card">
           <div className="flex items-center gap-2 mb-2">
             <UserCog size={20} className="text-cyan-600" />
             <h3 className="text-sm font-medium text-gray-600">税理士(S)</h3>
           </div>
-          <div className="text-3xl font-bold text-gray-900">{accStaffCount}</div>
+          <div className="text-3xl font-bold text-gray-900">{operatorCount}</div>
         </div>
         <div className="card">
           <div className="flex items-center gap-2 mb-2">
             <UserIcon size={20} className="text-gray-600" />
             <h3 className="text-sm font-medium text-gray-600">担当者</h3>
           </div>
-          <div className="text-3xl font-bold text-gray-900">{staffCount}</div>
+          <div className="text-3xl font-bold text-gray-900">{viewerCount}</div>
         </div>
       </div>
 
@@ -330,7 +328,7 @@ export default function SettingsPage() {
                   const isAdmin = user.role === 'admin';
                   return (
                     <tr key={user.id} className={`hover:bg-gray-50 transition-colors ${
-                      (user.role as string) === 'admin' ? 'bg-red-50/30' : (user.role as string) === 'accountant_manager' ? 'bg-blue-50/30' : (user.role as string) === 'accountant_staff' ? 'bg-cyan-50/30' : ''
+                      (user.role as string) === 'admin' ? 'bg-red-50/30' : (user.role as string) === 'manager' ? 'bg-blue-50/30' : (user.role as string) === 'operator' ? 'bg-cyan-50/30' : ''
                     }`}>
                       {/* 名前 */}
                       <td className="px-6 py-4 whitespace-nowrap">
@@ -409,10 +407,10 @@ export default function SettingsPage() {
           /* 簡易版 */
           <div className="space-y-2 text-sm">
             {[
-              { role: '管理者', color: 'text-red-700', desc: 'すべての機能にアクセス可能。ユーザー管理・顧客削除の権限を持つ唯一のロール。' },
-              { role: '税理士(M)', color: 'text-blue-700', desc: '顧客管理+全マスタ編集+全ワークフロー操作。勘定科目・税区分の編集権限あり。' },
-              { role: '税理士(S)', color: 'text-cyan-700', desc: 'ワークフロー全般+業種・ルール・取引先・品目・タグのマスタ編集。勘定科目・税区分は閲覧のみ。' },
-              { role: '担当者', color: 'text-gray-600', desc: 'ワークフロー全般（アップロード〜仕訳出力）。マスタの編集権限なし。' },
+              { role: '管理者', color: 'text-red-700', desc: 'すべての機能にアクセス可能。ユーザー管理・組織設定の権限を持つ唯一のロール。' },
+              { role: 'マネージャー', color: 'text-blue-700', desc: 'ルール承認・仕訳承認・エクスポート。顧客管理+全マスタ編集。' },
+              { role: '担当者', color: 'text-cyan-700', desc: '仕訳の確認・修正、ルール提案。承認・エクスポートは不可。' },
+              { role: '閲覧者', color: 'text-gray-600', desc: '証憑アップロードと閲覧のみ。編集・承認は一切不可。' },
             ].map(item => (
               <div key={item.role} className="flex items-start gap-2">
                 <span className={`font-semibold whitespace-nowrap ${item.color}`}>{item.role}</span>
@@ -539,10 +537,10 @@ export default function SettingsPage() {
             </label>
             <div className="space-y-2">
               {([
-                { value: 'admin',              icon: <Shield size={18} className="text-red-600" />,   label: '管理者',    desc: 'ユーザー管理+全機能' },
-                { value: 'accountant_manager', icon: <UserCog size={18} className="text-blue-600" />,  label: '税理士(M)', desc: '顧客管理+全マスタ+全ワークフロー' },
-                { value: 'accountant_staff',   icon: <UserCog size={18} className="text-cyan-600" />,  label: '税理士(S)', desc: 'ワークフロー+一部マスタ編集' },
-                { value: 'staff',              icon: <UserIcon size={18} className="text-gray-600" />, label: '担当者',    desc: 'ワークフローのみ（マスタ編集不可）' },
+                { value: 'admin',    icon: <Shield size={18} className="text-red-600" />,   label: '管理者',        desc: 'ユーザー管理+全機能' },
+                { value: 'manager',  icon: <UserCog size={18} className="text-blue-600" />,  label: 'マネージャー',  desc: 'ルール承認+仕訳承認+エクスポート' },
+                { value: 'operator', icon: <UserCog size={18} className="text-cyan-600" />,  label: '担当者',        desc: '仕訳確認・修正+ルール提案' },
+                { value: 'viewer',   icon: <UserIcon size={18} className="text-gray-600" />, label: '閲覧者',        desc: '証憑アップロードと閲覧のみ' },
               ] as const).map((opt) => (
                 <label
                   key={opt.value}

@@ -65,9 +65,9 @@ export default function SuppliersPage() {
   const [aliases, setAliases] = useState<SupplierAlias[]>([]);
   const [newAliasName, setNewAliasName] = useState('');
   const [orgId, setOrgId] = useState<string | null>(null);
-  const [userRole, setUserRole] = useState<string>('staff');
+  const [userRole, setUserRole] = useState<string>('viewer');
 
-  const canEdit = ['admin','accountant_manager','accountant_staff'].includes(userRole);
+  const canEdit = ['admin','manager','operator'].includes(userRole);
 
   const [formData, setFormData] = useState({
     name: '',

@@ -47,10 +47,10 @@ export default function TaxCategoriesPage() {
   const [activeTab, setActiveTab] = useState<'all' | 'income' | 'expense'>('all');
   const [activeSection, setActiveSection] = useState<'categories' | 'rates'>('categories');
   const [loading, setLoading] = useState(true);
-  const [userRole, setUserRole] = useState<string>('staff');
+  const [userRole, setUserRole] = useState<string>('viewer');
 
-  const canEditTaxCat = userRole === 'admin' || userRole === 'accountant_manager'; // 税区分はadminのみ
-  const canEditSettings = userRole === 'admin' || userRole === 'accountant_manager'; // 顧客別設定はaccountantも可
+  const canEditTaxCat = userRole === 'admin' || userRole === 'manager';
+  const canEditSettings = userRole === 'admin' || userRole === 'manager';
 
   // 税区分詳細モーダル
   const [showDetailModal, setShowDetailModal] = useState(false);

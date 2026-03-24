@@ -17,7 +17,7 @@ export interface User {
   name: string;
   email: string;
   password_hash: string;
-  role: 'admin' | 'accountant' | 'accountant_manager' | 'accountant_staff' | 'staff';
+  role: 'admin' | 'manager' | 'operator' | 'viewer';
   status: 'active' | 'inactive';
   last_login_at: string | null;
   created_at: string;
@@ -126,20 +126,6 @@ export interface TaxCategory {
   is_active: boolean;
   sort_order: number;
   description: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-// ④ Tag 型を修正（status削除、organization_id/client_id/is_active追加）
-export interface Tag {
-  id: string;
-  organization_id: string;
-  client_id: string | null;
-  tag_type: 'supplier' | 'item' | 'document' | 'journal_entry' | 'general';
-  name: string;
-  color: string | null;
-  description: string | null;
-  is_active: boolean;
   created_at: string;
   updated_at: string;
 }
