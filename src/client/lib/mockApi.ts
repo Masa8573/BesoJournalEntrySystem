@@ -4,7 +4,6 @@ import type {
   Industry,
   AccountItem,
   TaxCategory,
-  Tag,
   Rule,
   Document,
   JournalEntry,
@@ -17,7 +16,6 @@ import {
   industriesApi as _industriesApi,
   accountItemsApi as _accountItemsApi,
   taxCategoriesApi as _taxCategoriesApi,
-  tagsApi as _tagsApi,
   rulesApi as _rulesApi,
   documentsApi as _documentsApi,
   journalEntriesApi as _journalEntriesApi,
@@ -159,30 +157,6 @@ const mockApi = {
     },
   },
 
-  tags: {
-    getAll: async (): Promise<ApiResponse<Tag[]>> => {
-      await delay(200);
-      return { data: mockData.tags as any, error: null, status: 200 };
-    },
-    getById: async (_id: string): Promise<ApiResponse<Tag>> => {
-      await delay(200);
-      const item = mockData.tags.find(i => i.id === _id);
-      return { data: item as any || null, error: item ? null : 'Not found', status: item ? 200 : 404 };
-    },
-    create: async (data: Partial<Tag>): Promise<ApiResponse<Tag>> => {
-      await delay(300);
-      return { data: { id: String(Date.now()), ...data } as Tag, error: null, status: 201 };
-    },
-    update: async (_id: string, data: Partial<Tag>): Promise<ApiResponse<Tag>> => {
-      await delay(300);
-      return { data: { ...data, _id } as Tag, error: null, status: 200 };
-    },
-    delete: async (_id: string): Promise<ApiResponse<void>> => {
-      await delay(200);
-      return { data: null, error: null, status: 200 };
-    },
-  },
-
   rules: {
     getAll: async (): Promise<ApiResponse<Rule[]>> => {
       await delay(200);
@@ -299,7 +273,6 @@ const prodApi = {
   industries: _industriesApi,
   accountItems: _accountItemsApi,
   taxCategories: _taxCategoriesApi,
-  tags: _tagsApi,
   rules: _rulesApi,
   documents: _documentsApi,
   journalEntries: _journalEntriesApi,
@@ -313,7 +286,6 @@ export const clientsApi = api.clients;
 export const industriesApi = api.industries;
 export const accountItemsApi = api.accountItems;
 export const taxCategoriesApi = api.taxCategories;
-export const tagsApi = api.tags;
 export const rulesApi = api.rules;
 export const documentsApi = api.documents;
 export const journalEntriesApi = api.journalEntries;
