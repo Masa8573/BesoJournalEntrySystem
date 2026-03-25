@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   ZoomOut, ZoomIn, RotateCcw, ChevronLeft, ChevronRight,
-  ChevronDown, Ban, AlertCircle, Loader, CheckCircle, Eye, Search, Undo2,
+  ChevronDown, Ban, AlertCircle, Loader, CheckCircle, Eye, Search, Undo2, Clock
 } from 'lucide-react';
 import { useWorkflow } from '@/client/context/WorkflowContext';
 import { useSearchParams } from 'react-router-dom';
@@ -189,7 +189,7 @@ interface DocumentWithEntry {
 interface TaxRateOption { id: string; rate: number; name: string; is_current: boolean; }
 
 type ViewMode = 'list' | 'detail';
-type TabFilter = 'all' | 'unchecked' | 'excluded';
+type TabFilter = 'all' | 'unchecked' | 'reviewed' | 'excluded';
 
 // ============================================
 // メインコンポーネント
@@ -209,6 +209,8 @@ export default function ReviewPage() {
   const [industries, setIndustries] = useState<Array<{ id: string; name: string }>>([]);
   const [itemsMaster, setItemsMaster] = useState<Array<{ id: string; name: string; code: string | null }>>([]);
   const [businessRatio, setBusinessRatio] = useState(100); // W2: デフォルト100%（家事按分なし）
+  const [userRole, setUserRole] = useState<string>('viewer');
+  const isManagerOrAdmin = userRole === 'admin' || userRole === 'manager';
   const [clientRatios, setClientRatios] = useState<Array<{ account_item_id: string; business_ratio: number }>>([]);
   const [loading, setLoading] = useState(true);
 
@@ -240,6 +242,12 @@ export default function ReviewPage() {
     if (!currentWorkflow) return;
     setLoading(true);
     const clientId = currentWorkflow.clientId;
+    // ユーザーロール取得
+    const { data: { user: authUser } } = await supabase.auth.getUser();
+    if (authUser) {
+      const { data: userRow } = await supabase.from('users').select('role').eq('id', authUser.id).single();
+      if (userRow) setUserRole(userRow.role);
+    }
 
     const { data: docs } = await supabase
       .from('documents')
@@ -256,7 +264,7 @@ export default function ReviewPage() {
         journal_entry_lines ( id, line_number, debit_credit, account_item_id, tax_category_id, amount, description,
           account_item:account_items(id, name), tax_category:tax_categories(id, name) )`)
       .eq('client_id', clientId).in('document_id', docIds)
-      .in('status', ['draft', 'approved', 'posted']);
+      .in('status', ['draft', 'reviewed', 'approved', 'posted', 'amended']);
 
     // documentsの順序（アップロード順）に合わせてソート
     const mappedEntries: EntryRow[] = docIds.map(docId => {
@@ -431,7 +439,20 @@ export default function ReviewPage() {
     if (!item) return;
     setSaving(true);
     let entryId = form.entryId;
-    const targetStatus = form.isExcluded ? 'draft' : (markApproved ? 'approved' : (item.status === 'posted' ? 'posted' : item.status));
+    // ステータス遷移ロジック
+    let targetStatus: string;
+    if (form.isExcluded) {
+      targetStatus = 'draft';
+    } else if (!markApproved) {
+      // スキップ（保存のみ）: ステータスを変えない
+      targetStatus = item.status === 'posted' ? 'posted' : item.status;
+    } else if (isManagerOrAdmin) {
+      // manager/admin: 確認・承認 → approved に直接遷移
+      targetStatus = 'approved';
+    } else {
+      // operator: 確認OK → reviewed に遷移
+      targetStatus = 'reviewed';
+    }
 
     if (!entryId) {
       const { data: cd } = await supabase.from('clients').select('organization_id').eq('id', currentWorkflow!.clientId).single();
@@ -462,6 +483,32 @@ export default function ReviewPage() {
           supplier_id: form.supplierId || null, item_id: form.itemId || null,
         }).eq('id', form.lineId);
       }
+      // 承認履歴の記録（journal_entry_approvals）
+    if (markApproved && entryId && !form.isExcluded) {
+      const { data: { user: currentUser } } = await supabase.auth.getUser();
+      if (currentUser) {
+        if (isManagerOrAdmin) {
+          // manager/admin の自己承認: approved レコードを作成
+          await supabase.from('journal_entry_approvals').insert([{
+            journal_entry_id: entryId,
+            approver_id: currentUser.id,
+            approval_status: 'approved',
+            approval_level: 1,
+            approved_at: new Date().toISOString(),
+            comments: '自己確認・承認',
+          }]);
+        } else {
+          // operator: reviewed（確認OK）の記録
+          await supabase.from('journal_entry_approvals').insert([{
+            journal_entry_id: entryId,
+            approver_id: currentUser.id,
+            approval_status: 'pending',
+            approval_level: 1,
+            comments: '確認OK',
+          }]);
+        }
+      }
+    }
     }
     // ルール追加
     if (addRule && form.accountItemId) {
@@ -569,12 +616,35 @@ export default function ReviewPage() {
   // posted → approved（確定解除）
   // ============================================
   const handleRevert = async (entryId: string, currentStatus: string) => {
-    if (currentStatus === 'approved') {
+    if (currentStatus === 'reviewed' && isManagerOrAdmin) {
+      // reviewed → draft（マネージャーが差し戻し）
+      await supabase.from('journal_entries').update({ status: 'draft' }).eq('id', entryId);
+    } else if (currentStatus === 'approved') {
+      if (!isManagerOrAdmin) return;
       await supabase.from('journal_entries').update({ status: 'draft' }).eq('id', entryId);
     } else if (currentStatus === 'posted') {
-      if (!window.confirm('確定済みの仕訳を再確認に戻しますか？')) return;
-      await supabase.from('journal_entries').update({ status: 'approved' }).eq('id', entryId);
+      if (!isManagerOrAdmin) return;
+      if (!window.confirm('エクスポート済みの仕訳を修正対象にしますか？')) return;
+      await supabase.from('journal_entries').update({ status: 'amended' }).eq('id', entryId);
     }
+    await loadAllData();
+  };
+
+  // 一覧からの個別承認（manager/admin用）
+  const handleApproveFromList = async (entryId: string) => {
+    const { data: { user: currentUser } } = await supabase.auth.getUser();
+    if (!currentUser || !isManagerOrAdmin) return;
+    
+    await supabase.from('journal_entries').update({ status: 'approved' }).eq('id', entryId);
+    await supabase.from('journal_entry_approvals').insert([{
+      journal_entry_id: entryId,
+      approver_id: currentUser.id,
+      approval_status: 'approved',
+      approval_level: 1,
+      approved_at: new Date().toISOString(),
+      comments: '一覧画面から承認',
+    }]);
+    
     await loadAllData();
   };
 
@@ -627,7 +697,8 @@ export default function ReviewPage() {
     if (drafts.length > 0) {
       const ok = window.confirm(`未確認の仕訳が${drafts.length}件あります。\n\n仕訳を確定して出力に進みますか？`);
       if (!ok) return false;
-      await supabase.from('journal_entries').update({ status: 'approved' }).in('id', drafts.map(e => e.id));
+      const bulkStatus = isManagerOrAdmin ? 'approved' : 'reviewed';
+      await supabase.from('journal_entries').update({ status: bulkStatus }).in('id', drafts.map(e => e.id));
     }
     // 全件をpostedに
     const allIds = entries.map(e => e.id);
@@ -646,12 +717,15 @@ export default function ReviewPage() {
   const filteredEntries = useMemo(() => {
     if (activeTab === 'unchecked') return entries.filter(e => e.status === 'draft');
     if (activeTab === 'excluded') return entries.filter(e => e.is_excluded);
+    
     return entries;
   }, [entries, activeTab]);
 
   const allCount = entries.length;
   const uncheckedCount = entries.filter(e => e.status === 'draft').length;
+  const reviewedCount = entries.filter(e => e.status === 'reviewed').length;
   const approvedCount = entries.filter(e => e.status === 'approved' || e.status === 'posted').length;
+  const amendedCount = entries.filter(e => e.status === 'amended').length;
   const excludedCount = entries.filter(e => e.is_excluded).length;
   const reviewCount = entries.filter(e => e.requires_review || (e.ai_confidence != null && e.ai_confidence < 0.7)).length;
 
@@ -689,11 +763,13 @@ export default function ReviewPage() {
         {([
           { key: 'all' as TabFilter, label: 'すべて', count: allCount },
           { key: 'unchecked' as TabFilter, label: '未確認', count: uncheckedCount },
+          { key: 'reviewed' as TabFilter, label: '承認待ち', count: reviewedCount },
           { key: 'excluded' as TabFilter, label: '対象外', count: excludedCount },
         ]).map(tab => (
           <button key={tab.key} onClick={() => setActiveTab(tab.key)}
             className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
               activeTab === tab.key ? 'text-blue-600 border-blue-600 font-semibold' : 'text-gray-500 border-transparent hover:text-gray-700'
+              
             }`}>
             {tab.label}
             <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${activeTab === tab.key ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-500'}`}>{tab.count}</span>
@@ -722,6 +798,33 @@ export default function ReviewPage() {
             </div>
           )}
 
+          {viewMode === 'list' && isManagerOrAdmin && reviewedCount > 0 && (
+            <button
+              onClick={async () => {
+                if (!window.confirm(`確認済みの${reviewedCount}件を一括承認しますか？`)) return;
+                const reviewedEntries = entries.filter(e => e.status === 'reviewed');
+                const { data: { user: currentUser } } = await supabase.auth.getUser();
+                if (!currentUser) return;
+                await supabase.from('journal_entries')
+                  .update({ status: 'approved' })
+                  .in('id', reviewedEntries.map(e => e.id));
+                const approvals = reviewedEntries.map(e => ({
+                  journal_entry_id: e.id,
+                  approver_id: currentUser.id,
+                  approval_status: 'approved' as const,
+                  approval_level: 1,
+                  approved_at: new Date().toISOString(),
+                  comments: '一括承認',
+                }));
+                await supabase.from('journal_entry_approvals').insert(approvals);
+                await loadAllData();
+              }}
+              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-semibold hover:bg-green-700"
+            >
+              <CheckCircle size={16} /> 確認済み{reviewedCount}件を一括承認
+            </button>
+          )}
+
           {/* テーブル */}
           <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
             {viewMode === 'list' && (
@@ -735,16 +838,16 @@ export default function ReviewPage() {
               </div>
             )}
 
-            <div>
+<div>
               {viewMode === 'detail' ? (
-                /* 個別チェック時のコンパクト一覧（ヘッダーなし+右端に縦「一覧へ」） */
+                /* 個別チェック時のコンパクト一覧 */
                 <div className="flex">
                   <div className="flex-1 max-h-[90px] overflow-y-auto">
                     <table className="w-full">
                       <tbody className="divide-y divide-gray-100">
                         {filteredEntries.map((entry, idx) => {
                           const isSelected = items[currentIndex]?.entryId === entry.id;
-                          const statusLabel = entry.is_excluded ? '外' : entry.status === 'approved' ? '済' : entry.status === 'posted' ? '定' : '未';
+                          const statusLabel = entry.is_excluded ? '外' : entry.status === 'approved' ? '承認' : entry.status === 'posted' ? '済' : entry.status === 'reviewed' ? '確認' : entry.status === 'amended' ? '修正' : '未';
                           return (
                             <tr key={entry.id} ref={isSelected ? selectedRowRef : undefined}
                               onClick={() => openDetail(entry.id)}
@@ -757,6 +860,8 @@ export default function ReviewPage() {
                                 <span className={`text-[9px] px-1 py-0.5 rounded ${
                                   entry.status === 'approved' ? 'bg-green-100 text-green-700' :
                                   entry.status === 'posted' ? 'bg-purple-100 text-purple-700' :
+                                  entry.status === 'reviewed' ? 'bg-yellow-100 text-yellow-700' :
+                                  entry.status === 'amended' ? 'bg-orange-100 text-orange-700' :
                                   entry.is_excluded ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-500'
                                 }`}>{statusLabel}</span>
                               </td>
@@ -774,59 +879,69 @@ export default function ReviewPage() {
                 </div>
               ) : (
                 /* 一覧モードのフルテーブル */
-              <table className="w-full">
-                <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
-                  <tr>
-                    <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase w-10">#</th>
-                    <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase">取引日</th>
-                    <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase">摘要</th>
-                    <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase">勘定科目</th>
-                    <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase">税区分</th>
-                    <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 uppercase">金額</th>
-                    <th className="px-4 py-2.5 text-center text-xs font-semibold text-gray-500 uppercase">状態</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filteredEntries.length === 0 ? (
-                    <tr><td colSpan={7} className="px-4 py-12 text-center text-gray-400">データがありません</td></tr>
-                  ) : filteredEntries.map((entry, idx) => {
-                    const needsReview = entry.requires_review || (entry.ai_confidence != null && entry.ai_confidence < 0.7);
-                    const isSelected = items[currentIndex]?.entryId === entry.id;
-                    return (
-                      <tr key={entry.id} onClick={() => openDetail(entry.id)}
-                        className={`cursor-pointer transition-colors hover:bg-gray-50 ${needsReview ? 'bg-yellow-50' : ''} ${isSelected ? 'bg-blue-50' : ''} ${entry.status === 'approved' ? 'bg-green-50/30' : ''}`}>
-                        <td className="px-3 py-3 text-xs text-gray-400">{idx + 1}</td>
-                        <td className="px-4 py-3 text-sm">{new Date(entry.entry_date).toLocaleDateString('ja-JP')}</td>
-                        <td className="px-4 py-3 text-sm max-w-[200px] truncate">{entry.description || '-'}</td>
-                        <td className="px-4 py-3 text-sm">{entry.accountItemName || '-'}</td>
-                        <td className="px-4 py-3 text-sm">{entry.taxCategoryName || '-'}</td>
-                        <td className="px-4 py-3 text-sm text-right font-semibold tabular-nums">{fmt(entry.amount)}</td>
-                        <td className="px-4 py-3 text-center">
-                          {entry.is_excluded ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700"><Ban size={10} />対象外</span>
-                          ) : entry.status === 'posted' ? (
-                            <div className="flex items-center justify-center gap-1.5">
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800"><CheckCircle size={10} />確定</span>
-                              <button onClick={(e) => { e.stopPropagation(); handleRevert(entry.id, 'posted'); }}
-                                className="p-0.5 text-purple-500 hover:bg-purple-50 rounded" title="確定解除"><Undo2 size={12} /></button>
-                            </div>
-                          ) : entry.status === 'approved' ? (
-                            <div className="flex items-center justify-center gap-1.5">
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800"><CheckCircle size={10} />確認済</span>
-                              <button onClick={(e) => { e.stopPropagation(); handleRevert(entry.id, 'approved'); }}
-                                className="p-0.5 text-green-500 hover:bg-green-50 rounded" title="差し戻し"><Undo2 size={12} /></button>
-                            </div>
-                          ) : needsReview ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800"><AlertCircle size={10} />要確認</span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">未確認</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                <table className="w-full">
+                  <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
+                    <tr>
+                      <th className="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase w-10">#</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase">取引日</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase">摘要</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase">勘定科目</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 uppercase">税区分</th>
+                      <th className="px-4 py-2.5 text-right text-xs font-semibold text-gray-500 uppercase">金額</th>
+                      <th className="px-4 py-2.5 text-center text-xs font-semibold text-gray-500 uppercase">状態</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {filteredEntries.length === 0 ? (
+                      <tr><td colSpan={7} className="px-4 py-12 text-center text-gray-400">データがありません</td></tr>
+                    ) : filteredEntries.map((entry, idx) => {
+                      const needsReview = entry.requires_review || (entry.ai_confidence != null && entry.ai_confidence < 0.7);
+                      const isSelected = items[currentIndex]?.entryId === entry.id;
+                      return (
+                        <tr key={entry.id} onClick={() => openDetail(entry.id)}
+                          className={`cursor-pointer transition-colors hover:bg-gray-50 ${needsReview ? 'bg-yellow-50' : ''} ${isSelected ? 'bg-blue-50' : ''} ${entry.status === 'approved' ? 'bg-green-50/30' : ''}`}>
+                          <td className="px-3 py-3 text-xs text-gray-400">{idx + 1}</td>
+                          <td className="px-4 py-3 text-sm">{new Date(entry.entry_date).toLocaleDateString('ja-JP')}</td>
+                          <td className="px-4 py-3 text-sm max-w-[200px] truncate">{entry.description || '-'}</td>
+                          <td className="px-4 py-3 text-sm">{entry.accountItemName || '-'}</td>
+                          <td className="px-4 py-3 text-sm">{entry.taxCategoryName || '-'}</td>
+                          <td className="px-4 py-3 text-sm text-right font-semibold tabular-nums">{fmt(entry.amount)}</td>
+                          <td className="px-4 py-3 text-center">
+                            {entry.is_excluded ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700"><Ban size={10} />対象外</span>
+                            ) : entry.status === 'posted' ? (
+                              <div className="flex items-center justify-center gap-1.5">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800"><CheckCircle size={10} />確定</span>
+                                <button onClick={(e) => { e.stopPropagation(); handleRevert(entry.id, 'posted'); }}
+                                  className="p-0.5 text-purple-500 hover:bg-purple-50 rounded" title="確定解除"><Undo2 size={12} /></button>
+                              </div>
+                            ) : entry.status === 'reviewed' ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">
+                                <Clock size={10} />確認済み
+                                {isManagerOrAdmin && (
+                                  <button onClick={(e) => { e.stopPropagation(); handleApproveFromList(entry.id); }}
+                                    className="ml-1 px-1.5 py-0.5 bg-green-500 text-white rounded text-[10px] hover:bg-green-600">
+                                    承認
+                                  </button>
+                                )}
+                              </span>
+                            ) : entry.status === 'approved' ? (
+                              <div className="flex items-center justify-center gap-1.5">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800"><CheckCircle size={10} />承認済</span>
+                                <button onClick={(e) => { e.stopPropagation(); handleRevert(entry.id, 'approved'); }}
+                                  className="p-0.5 text-green-500 hover:bg-green-50 rounded" title="差し戻し"><Undo2 size={12} /></button>
+                              </div>
+                            ) : needsReview ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800"><AlertCircle size={10} />要確認</span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">未確認</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               )}
             </div>
           </div>
@@ -1104,13 +1219,13 @@ export default function ReviewPage() {
                       </button>
                       {currentIndex >= items.length - 1 ? (
                         <button onClick={async () => { await saveCurrentItem(true); setViewMode('list'); loadAllData(); }}
-                          className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold bg-green-600 text-white hover:bg-green-700">
-                          <CheckCircle size={16} /> チェック完了
+                          className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold text-white ${isManagerOrAdmin ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}`}>
+                          <CheckCircle size={16} /> {isManagerOrAdmin ? '確認・承認して完了' : '確認OK・完了'}
                         </button>
                       ) : (
                         <button onClick={goNext}
-                          className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold bg-blue-600 text-white hover:bg-blue-700">
-                          次へ <ChevronRight size={16} />
+                          className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold text-white ${isManagerOrAdmin ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}`}>
+                          {isManagerOrAdmin ? '承認して次へ' : '確認OK・次へ'} <ChevronRight size={16} />
                         </button>
                       )}
                     </div>

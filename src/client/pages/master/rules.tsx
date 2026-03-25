@@ -40,6 +40,14 @@ export default function RulesPage() {
     business_ratio: '',
     auto_apply: true,
     require_confirmation: false,
+    // 新条件フィールド
+    item_pattern: '',
+    payment_method_condition: '',
+    document_type_condition: '',
+    // 新アクションフィールド
+    business_ratio_note: '',
+    entry_type_hint: 'normal',
+    requires_manual_review: false,
   });
 
   useEffect(() => { loadData(); }, []);
@@ -70,6 +78,8 @@ export default function RulesPage() {
       industry_id: '', client_id: '', supplier_pattern: '', transaction_pattern: '',
       amount_min: '', amount_max: '', account_item_id: '', tax_category_id: '',
       description_template: '', business_ratio: '', auto_apply: true, require_confirmation: false,
+      item_pattern: '', payment_method_condition: '', document_type_condition: '',
+      business_ratio_note: '', entry_type_hint: 'normal', requires_manual_review: false,
     });
     setDuplicateWarning('');
   };
@@ -96,6 +106,12 @@ export default function RulesPage() {
       business_ratio: rule.actions?.business_ratio ? (Number(rule.actions.business_ratio) * 100).toString() : '',
       auto_apply: rule.auto_apply,
       require_confirmation: rule.require_confirmation,
+      item_pattern: rule.conditions?.item_pattern || '',
+      payment_method_condition: rule.conditions?.payment_method || '',
+      document_type_condition: rule.conditions?.document_type || '',
+      business_ratio_note: rule.actions?.business_ratio_note || '',
+      entry_type_hint: rule.actions?.entry_type_hint || 'normal',
+      requires_manual_review: rule.actions?.requires_manual_review || false,
     });
     setShowModal(true);
   };
@@ -140,12 +156,18 @@ export default function RulesPage() {
         transaction_pattern: formData.transaction_pattern || null,
         amount_min: formData.amount_min ? Number(formData.amount_min) : null,
         amount_max: formData.amount_max ? Number(formData.amount_max) : null,
+        item_pattern: formData.item_pattern || null,
+        payment_method: formData.payment_method_condition || null,
+        document_type: formData.document_type_condition || null,
       },
       actions: {
         account_item_id: formData.account_item_id || null,
         tax_category_id: formData.tax_category_id || null,
         description_template: formData.description_template || null,
         business_ratio: formData.business_ratio ? Number(formData.business_ratio) / 100 : null,
+        business_ratio_note: formData.business_ratio_note || null,
+        entry_type_hint: formData.entry_type_hint !== 'normal' ? formData.entry_type_hint : null,
+        requires_manual_review: formData.requires_manual_review || null,
       },
       auto_apply: formData.auto_apply,
       require_confirmation: formData.require_confirmation,

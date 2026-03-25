@@ -514,8 +514,16 @@ export interface RuleMatchInput {
   amount: number;
   description?: string;
   client_id: string;
-  industry_ids: string[];  // クライアントに紐づく業種ID一覧
+  industry_ids: string[];           // クライアントに紐づく業種ID一覧
+  industry_ids_with_ancestors: string[];  // 業種ID + 全祖先ID（industry_closureから取得）
+  industry_depths: Map<string, number>;   // industry_id → depth（0=自身, 1=親, 2=祖父...）
   payment_method?: string | null;
+  item_name?: string | null;        // 品目名
+  document_type?: string | null;    // 証憑種別コード
+  has_invoice_number?: boolean | null;
+  tax_rate_hint?: number | null;    // OCR読取税率
+  is_internal_tax?: boolean | null;
+  frequency_hint?: string | null;   // 'recurring' / 'one_time'
 }
 
 export interface MatchedRule {
@@ -525,17 +533,102 @@ export interface MatchedRule {
   tax_category_id: string | null;
   description_template: string | null;
   business_ratio: number | null;
+  business_ratio_note: string | null;
+  entry_type_hint: string | null;
+  requires_manual_review: boolean;
   confidence: number;
 }
 
 /**
+ * ルールのconditionsからルール名を自動生成する。
+ * rule_nameが手動設定済み（非null）ならそちらを優先。
+ * 
+ * 生成ロジック:
+ *   1. supplier_pattern → 取引先名を先頭に
+ *   2. item_pattern → (品目名) を追加
+ *   3. amount_min/max → 金額範囲を追加
+ *   4. payment_method → 支払方法を追加
+ *   5. document_type → 証憑種別を追加
+ *   6. → 勘定科目名 で締める
+ */
+export function generateRuleName(
+  conditions: {
+    supplier_pattern?: string | null;
+    transaction_pattern?: string | null;
+    amount_min?: number | null;
+    amount_max?: number | null;
+    item_pattern?: string | null;
+    payment_method?: string | null;
+    document_type?: string | null;
+    has_invoice_number?: boolean | null;
+  },
+  accountItemName?: string | null
+): string {
+  const parts: string[] = [];
+
+  // 取引先
+  if (conditions.supplier_pattern) {
+    parts.push(conditions.supplier_pattern);
+  }
+
+  // 品目
+  if (conditions.item_pattern) {
+    parts.push(`(${conditions.item_pattern})`);
+  }
+
+  // 摘要パターン（取引先も品目もない場合のフォールバック）
+  if (!conditions.supplier_pattern && !conditions.item_pattern && conditions.transaction_pattern) {
+    parts.push(conditions.transaction_pattern);
+  }
+
+  // 金額範囲
+  if (conditions.amount_min != null && conditions.amount_max != null) {
+    parts.push(`¥${conditions.amount_min.toLocaleString()}〜¥${conditions.amount_max.toLocaleString()}`);
+  } else if (conditions.amount_min != null) {
+    parts.push(`¥${conditions.amount_min.toLocaleString()}以上`);
+  } else if (conditions.amount_max != null) {
+    parts.push(`¥${conditions.amount_max.toLocaleString()}以下`);
+  }
+
+  // 支払方法
+  if (conditions.payment_method) {
+    const methodNames: Record<string, string> = {
+      cash: '現金', card: 'カード', credit_card: 'カード',
+      bank_transfer: '振込', e_money: '電子マネー',
+    };
+    parts.push(methodNames[conditions.payment_method] || conditions.payment_method);
+  }
+
+  // 証憑種別
+  if (conditions.document_type) {
+    parts.push(`[${conditions.document_type}]`);
+  }
+
+  // 勘定科目名で締める
+  if (accountItemName) {
+    parts.push(`→ ${accountItemName}`);
+  }
+
+  // パーツがない場合のフォールバック
+  if (parts.length === 0) {
+    return accountItemName ? `→ ${accountItemName}` : '自動生成ルール';
+  }
+
+  return parts.join(' ');
+}
+
+/**
  * processing_rules からマッチするルールを検索する。
- * 優先順位: client（顧客別）> industry（業種別）> shared（共通）
+ * 優先順位: client（顧客別）> industry（業種別、depth昇順）> shared（共通）
  * 同一スコープ内では priority が小さいほど優先。
- *
+ * 
  * @param rules - Supabase から取得した processing_rules の配列
  * @param input - マッチング入力（取引先名、金額等）
  * @returns マッチしたルール情報、またはマッチしなければ null
+ *
+ * industry scopeの階層遡り:
+ *   industry_closureで取得した全祖先IDリストを使い、
+ *   depthの昇順（最も具体的な階層が先）でルールを検索。
  */
 export function matchProcessingRules(
   rules: Array<{
@@ -551,37 +644,60 @@ export function matchProcessingRules(
       transaction_pattern?: string | null;
       amount_min?: number | null;
       amount_max?: number | null;
+      item_pattern?: string | null;
+      payment_method?: string | null;
+      document_type?: string | null;
+      has_invoice_number?: boolean | null;
+      tax_rate_hint?: number | null;
+      is_internal_tax?: boolean | null;
+      frequency_hint?: string | null;
     };
     actions: {
       account_item_id?: string | null;
       tax_category_id?: string | null;
       description_template?: string | null;
       business_ratio?: number | null;
+      business_ratio_note?: string | null;
+      entry_type_hint?: string | null;
+      requires_manual_review?: boolean | null;
+      auto_tags?: string[] | null;
     };
     is_active: boolean;
   }>,
   input: RuleMatchInput
 ): MatchedRule | null {
-  // アクティブなルールのみ
   const activeRules = rules.filter(r => r.is_active);
 
-  // スコープ別にフィルタリング
-  const clientRules = activeRules.filter(r => r.scope === 'client' && r.client_id === input.client_id);
-  const industryRules = activeRules.filter(r => r.scope === 'industry' && r.industry_id && input.industry_ids.includes(r.industry_id));
-  const sharedRules = activeRules.filter(r => r.scope === 'shared');
+  // 1. client scope: 顧客別ルール
+  const clientRules = activeRules
+    .filter(r => r.scope === 'client' && r.client_id === input.client_id)
+    .sort((a, b) => a.priority - b.priority);
 
-  // 優先順位: client > industry > shared
-  const orderedRules = [
-    ...clientRules.sort((a, b) => a.priority - b.priority),
-    ...industryRules.sort((a, b) => a.priority - b.priority),
-    ...sharedRules.sort((a, b) => a.priority - b.priority),
-  ];
+  // 2. industry scope: 業種別ルール（depth昇順 = 具体的な階層が先）
+  const industryRules = activeRules
+    .filter(r => r.scope === 'industry' && r.industry_id && input.industry_ids_with_ancestors.includes(r.industry_id))
+    .sort((a, b) => {
+      // depthが小さい（=より具体的）方を優先
+      const depthA = input.industry_depths.get(a.industry_id!) ?? 999;
+      const depthB = input.industry_depths.get(b.industry_id!) ?? 999;
+      if (depthA !== depthB) return depthA - depthB;
+      // 同一depth内ではpriorityで比較
+      return a.priority - b.priority;
+    });
+
+  // 3. shared scope: 汎用ルール
+  const sharedRules = activeRules
+    .filter(r => r.scope === 'shared')
+    .sort((a, b) => a.priority - b.priority);
+
+  // 優先順位: client > industry(depth昇順) > shared
+  const orderedRules = [...clientRules, ...industryRules, ...sharedRules];
 
   for (const rule of orderedRules) {
     if (matchesConditions(rule.conditions, input)) {
-      if (!rule.actions.account_item_id) continue; // 勘定科目なしのルールはスキップ
+      if (!rule.actions.account_item_id) continue;
 
-      console.log(`[ルールマッチ] ✅ マッチ: "${rule.rule_name}" (priority=${rule.priority}, scope=${rule.scope})`);
+      console.log(`[ルールマッチ] ✅ マッチ: "${rule.rule_name}" (priority=${rule.priority}, scope=${rule.scope}, industry_depth=${rule.industry_id ? input.industry_depths.get(rule.industry_id) : 'N/A'})`);
 
       return {
         rule_id: rule.id,
@@ -590,7 +706,10 @@ export function matchProcessingRules(
         tax_category_id: rule.actions.tax_category_id || null,
         description_template: rule.actions.description_template || null,
         business_ratio: rule.actions.business_ratio || null,
-        confidence: 0.95, // ルールマッチは高信頼度
+        business_ratio_note: rule.actions.business_ratio_note || null,
+        entry_type_hint: rule.actions.entry_type_hint || null,
+        requires_manual_review: rule.actions.requires_manual_review === true,
+        confidence: 0.95,
       };
     }
   }
@@ -602,17 +721,32 @@ export function matchProcessingRules(
 /**
  * ルールの conditions が入力にマッチするか判定
  */
+/**
+ * ルールの conditions が入力にマッチするか判定。
+ * 全ての指定された条件がANDで一致する必要がある。
+ * 条件が一つも指定されていないルールはマッチしない（全一致防止）。
+ */
 function matchesConditions(
   conditions: {
     supplier_pattern?: string | null;
     transaction_pattern?: string | null;
     amount_min?: number | null;
     amount_max?: number | null;
+    item_pattern?: string | null;
+    payment_method?: string | null;
+    document_type?: string | null;
+    has_invoice_number?: boolean | null;
+    tax_rate_hint?: number | null;
+    is_internal_tax?: boolean | null;
+    frequency_hint?: string | null;
   },
   input: RuleMatchInput
 ): boolean {
+  let hasAnyCondition = false;
+
   // 取引先パターン（部分一致、大文字小文字無視）
   if (conditions.supplier_pattern) {
+    hasAnyCondition = true;
     const pattern = conditions.supplier_pattern.toLowerCase();
     const supplier = input.supplier.toLowerCase();
     if (!supplier.includes(pattern)) return false;
@@ -620,22 +754,70 @@ function matchesConditions(
 
   // 摘要パターン（部分一致）
   if (conditions.transaction_pattern) {
+    hasAnyCondition = true;
     const pattern = conditions.transaction_pattern.toLowerCase();
     const desc = (input.description || '').toLowerCase();
     const supplier = input.supplier.toLowerCase();
-    // 摘要 or 取引先名に含まれていればマッチ
     if (!desc.includes(pattern) && !supplier.includes(pattern)) return false;
   }
 
   // 金額範囲
-  if (conditions.amount_min != null && input.amount < conditions.amount_min) return false;
-  if (conditions.amount_max != null && input.amount > conditions.amount_max) return false;
+  if (conditions.amount_min != null) {
+    hasAnyCondition = true;
+    if (input.amount < conditions.amount_min) return false;
+  }
+  if (conditions.amount_max != null) {
+    hasAnyCondition = true;
+    if (input.amount > conditions.amount_max) return false;
+  }
+
+  // 品目パターン（部分一致）
+  if (conditions.item_pattern) {
+    hasAnyCondition = true;
+    const pattern = conditions.item_pattern.toLowerCase();
+    const itemName = (input.item_name || '').toLowerCase();
+    if (!itemName.includes(pattern)) return false;
+  }
+
+  // 支払方法（完全一致）
+  if (conditions.payment_method) {
+    hasAnyCondition = true;
+    if (input.payment_method !== conditions.payment_method) return false;
+  }
+
+  // 証憑種別（完全一致）
+  if (conditions.document_type) {
+    hasAnyCondition = true;
+    if (input.document_type !== conditions.document_type) return false;
+  }
+
+  // インボイス番号有無
+  if (conditions.has_invoice_number != null) {
+    hasAnyCondition = true;
+    if (input.has_invoice_number !== conditions.has_invoice_number) return false;
+  }
+
+  // OCR読取税率（許容誤差0.001）
+  if (conditions.tax_rate_hint != null) {
+    hasAnyCondition = true;
+    if (input.tax_rate_hint == null) return false;
+    if (Math.abs(input.tax_rate_hint - conditions.tax_rate_hint) > 0.001) return false;
+  }
+
+  // 内税/外税
+  if (conditions.is_internal_tax != null) {
+    hasAnyCondition = true;
+    if (input.is_internal_tax !== conditions.is_internal_tax) return false;
+  }
+
+  // 取引頻度
+  if (conditions.frequency_hint) {
+    hasAnyCondition = true;
+    if (input.frequency_hint !== conditions.frequency_hint) return false;
+  }
 
   // 条件が一つもない場合はマッチしない（全一致防止）
-  if (!conditions.supplier_pattern && !conditions.transaction_pattern &&
-      conditions.amount_min == null && conditions.amount_max == null) {
-    return false;
-  }
+  if (!hasAnyCondition) return false;
 
   return true;
 }

@@ -143,20 +143,31 @@ export interface Rule {
   scope: 'shared' | 'industry' | 'client';
   rule_type: '支出' | '収入';
 
-  // 条件: { supplier_pattern?, amount_min?, amount_max?, transaction_pattern? }
+  // 条件（11キー）
   conditions: {
-    supplier_pattern?: string | null;
-    transaction_pattern?: string | null;
-    amount_min?: number | null;
-    amount_max?: number | null;
+    supplier_pattern?: string | null;       // 取引先名パターン（部分一致）
+    transaction_pattern?: string | null;    // 摘要パターン（部分一致）
+    amount_min?: number | null;             // 金額下限
+    amount_max?: number | null;             // 金額上限
+    item_pattern?: string | null;           // 品目パターン（部分一致）
+    payment_method?: string | null;         // 支払方法（cash/card/bank_transfer/e_money）
+    document_type?: string | null;          // 証憑種別コード（document_types.code）
+    has_invoice_number?: boolean | null;    // インボイス番号の有無
+    tax_rate_hint?: number | null;          // OCR読取税率（0.10 / 0.08）
+    is_internal_tax?: boolean | null;       // 内税(true) / 外税(false)
+    frequency_hint?: string | null;         // 取引頻度（'recurring' / 'one_time'）
   };
 
-  // アクション: { account_item_id?, tax_category_id?, description_template?, business_ratio? }
+  // アクション（8キー）
   actions: {
-    account_item_id?: string | null;
-    tax_category_id?: string | null;
-    description_template?: string | null;
-    business_ratio?: number | null;
+    account_item_id?: string | null;        // 勘定科目UUID
+    tax_category_id?: string | null;        // 税区分UUID
+    description_template?: string | null;   // 摘要テンプレート（{supplier}等のプレースホルダ対応）
+    business_ratio?: number | null;         // 家事按分率（0.0〜1.0）
+    business_ratio_note?: string | null;    // 按分根拠メモ
+    entry_type_hint?: string | null;        // 特殊仕訳フラグ（'normal'/'fixed_asset'/'prepaid'/'reversal'）
+    requires_manual_review?: boolean | null; // 強制レビューフラグ
+    auto_tags?: string[] | null;            // 自動付与メモID（将来のnotes連携用）
   };
 
   is_active: boolean;
