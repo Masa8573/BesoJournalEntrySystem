@@ -725,7 +725,7 @@ export default function ReviewPage() {
   const uncheckedCount = entries.filter(e => e.status === 'draft').length;
   const reviewedCount = entries.filter(e => e.status === 'reviewed').length;
   const approvedCount = entries.filter(e => e.status === 'approved' || e.status === 'posted').length;
-  const amendedCount = entries.filter(e => e.status === 'amended').length;
+  //const amendedCount = entries.filter(e => e.status === 'amended').length;
   const excludedCount = entries.filter(e => e.is_excluded).length;
   const reviewCount = entries.filter(e => e.requires_review || (e.ai_confidence != null && e.ai_confidence < 0.7)).length;
 
