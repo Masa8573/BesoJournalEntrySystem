@@ -201,10 +201,9 @@ export default function RulesPage() {
   // ============================================
   const filteredRules = useMemo(() => {
     return rules.filter(rule => {
-      // タブフィルター
       if (activeTab !== 'all' && rule.scope !== activeTab) return false;
-      // 検索フィルター
       if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
         const ruleName = (rule.rule_name || '').toLowerCase();
         const supplierPattern = (rule.conditions?.supplier_pattern || '').toLowerCase();
         const transactionPattern = (rule.conditions?.transaction_pattern || '').toLowerCase();
