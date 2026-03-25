@@ -205,14 +205,15 @@ export default function RulesPage() {
       if (activeTab !== 'all' && rule.scope !== activeTab) return false;
       // 検索フィルター
       if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
+        const ruleName = (rule.rule_name || '').toLowerCase();
         const supplierPattern = (rule.conditions?.supplier_pattern || '').toLowerCase();
         const transactionPattern = (rule.conditions?.transaction_pattern || '').toLowerCase();
+        const itemPattern = (rule.conditions?.item_pattern || '').toLowerCase();
         const accountName = getAccountName(rule).toLowerCase();
         const taxName = getTaxCategoryName(rule).toLowerCase();
         const scopeName = getScopeName(rule).toLowerCase();
-        return supplierPattern.includes(q) || transactionPattern.includes(q) ||
-          accountName.includes(q) || taxName.includes(q) || scopeName.includes(q);
+        return ruleName.includes(q) || supplierPattern.includes(q) || transactionPattern.includes(q) ||
+          itemPattern.includes(q) || accountName.includes(q) || taxName.includes(q) || scopeName.includes(q);
       }
       return true;
     });
@@ -418,11 +419,11 @@ export default function RulesPage() {
                 <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase" style={{ width: 70 }}>優先度</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase whitespace-nowrap" style={{ width: 90 }}>種別</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">適用範囲</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">取引先パターン</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">ルール名 / 条件</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">金額範囲</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">勘定科目</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">税区分</th>
-                <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase">按分</th>
+                <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase">按分/フラグ</th>
                 <th className="px-4 py-3 text-center text-xs font-semibold text-gray-500 uppercase whitespace-nowrap" style={{ width: 80 }}>状態</th>
                 <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase" style={{ width: 80 }}>操作</th>
               </tr>
@@ -452,14 +453,46 @@ export default function RulesPage() {
                         {scopeStyle.icon} {getScopeName(rule)}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-sm text-gray-900">{rule.conditions?.supplier_pattern || rule.conditions?.transaction_pattern || '-'}</td>
+                    <td className="px-4 py-3">
+                      <div className="text-sm font-medium text-gray-900">{rule.rule_name}</div>
+                      <div className="flex flex-wrap gap-1 mt-0.5">
+                        {rule.conditions?.supplier_pattern && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-blue-50 text-blue-700">取引先: {rule.conditions.supplier_pattern}</span>
+                        )}
+                        {rule.conditions?.item_pattern && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-purple-50 text-purple-700">品目: {rule.conditions.item_pattern}</span>
+                        )}
+                        {rule.conditions?.transaction_pattern && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-gray-100 text-gray-600">摘要: {rule.conditions.transaction_pattern}</span>
+                        )}
+                        {rule.conditions?.payment_method && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-green-50 text-green-700">支払: {rule.conditions.payment_method}</span>
+                        )}
+                        {rule.conditions?.document_type && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-orange-50 text-orange-700">種別: {rule.conditions.document_type}</span>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-4 py-3 text-xs text-gray-500">{getAmountRange(rule)}</td>
                     <td className="px-4 py-3 text-sm text-gray-900">{getAccountName(rule)}</td>
                     <td className="px-4 py-3 text-xs text-gray-600">{getTaxCategoryName(rule)}</td>
                     <td className="px-4 py-3 text-center">
-                      {ratio != null ? (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-50 text-yellow-700 border border-yellow-200">{ratio}%</span>
-                      ) : <span className="text-gray-300">-</span>}
+                      <div className="flex flex-col items-center gap-0.5">
+                        {ratio != null && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-50 text-yellow-700 border border-yellow-200">{ratio}%</span>
+                        )}
+                        {rule.actions?.entry_type_hint && rule.actions.entry_type_hint !== 'normal' && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-indigo-50 text-indigo-700">
+                            {rule.actions.entry_type_hint === 'fixed_asset' ? '資産' : rule.actions.entry_type_hint === 'prepaid' ? '前払' : '逆仕訳'}
+                          </span>
+                        )}
+                        {rule.actions?.requires_manual_review && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-red-50 text-red-700">要確認</span>
+                        )}
+                        {!ratio && !rule.actions?.entry_type_hint && !rule.actions?.requires_manual_review && (
+                          <span className="text-gray-300">-</span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-center">
                       <button onClick={() => handleToggleActive(rule)}>
@@ -584,6 +617,42 @@ export default function RulesPage() {
                   className="input" placeholder="上限なし" min="0" />
               </div>
             </div>
+            {/* 品目パターン */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">品目パターン</label>
+              <input type="text" value={formData.item_pattern} onChange={e => setFormData({ ...formData, item_pattern: e.target.value })}
+                className="input" placeholder="例: コピー用紙（部分一致）" />
+            </div>
+
+            {/* 支払方法・証憑種別 */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">支払方法</label>
+                <select value={formData.payment_method_condition} onChange={e => setFormData({ ...formData, payment_method_condition: e.target.value })} className="input">
+                  <option value="">指定なし</option>
+                  <option value="cash">現金</option>
+                  <option value="credit_card">クレジットカード</option>
+                  <option value="bank_transfer">銀行振込</option>
+                  <option value="e_money">電子マネー/QR決済</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">証憑種別</label>
+                <select value={formData.document_type_condition} onChange={e => setFormData({ ...formData, document_type_condition: e.target.value })} className="input">
+                  <option value="">指定なし</option>
+                  <option value="receipt">レシート/領収書</option>
+                  <option value="invoice">請求書</option>
+                  <option value="bank_statement">銀行通帳</option>
+                  <option value="credit_card">クレカ明細</option>
+                  <option value="etc_statement">ETC利用明細</option>
+                  <option value="e_money_statement">電子マネー/QR決済</option>
+                  <option value="expense_report">経費精算書</option>
+                  <option value="payroll">給与明細</option>
+                  <option value="sales_report">売上集計表</option>
+                  <option value="payment_notice">支払通知書</option>
+                </select>
+              </div>
+            </div>
           </div>
 
           {/* 重複警告（R2） */}
@@ -629,6 +698,34 @@ export default function RulesPage() {
                 {formData.business_ratio && (
                   <p className="text-xs text-yellow-700 mt-1">事業用 {formData.business_ratio}% / 私用 {100 - Number(formData.business_ratio)}%</p>
                 )}
+              </div>
+              {/* 按分根拠メモ（家事按分入力時のみ表示） */}
+              {formData.business_ratio && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">按分根拠メモ</label>
+                  <input type="text" value={formData.business_ratio_note} onChange={e => setFormData({ ...formData, business_ratio_note: e.target.value })}
+                    className="input" placeholder="例: 自動車は週5日業務使用" />
+                </div>
+              )}
+
+              {/* 特殊仕訳・強制レビュー */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">仕訳タイプ</label>
+                  <select value={formData.entry_type_hint} onChange={e => setFormData({ ...formData, entry_type_hint: e.target.value })} className="input">
+                    <option value="normal">通常</option>
+                    <option value="fixed_asset">固定資産取得</option>
+                    <option value="prepaid">前払費用</option>
+                    <option value="reversal">逆仕訳</option>
+                  </select>
+                </div>
+                <div className="flex items-end">
+                  <label className="flex items-center gap-2 cursor-pointer pb-2">
+                    <input type="checkbox" checked={formData.requires_manual_review}
+                      onChange={e => setFormData({ ...formData, requires_manual_review: e.target.checked })} />
+                    <span className="text-sm text-gray-700">強制レビュー対象にする</span>
+                  </label>
+                </div>
               </div>
             </div>
           </div>
