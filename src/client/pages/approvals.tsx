@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { CheckCircle, XCircle, AlertCircle, Filter, ChevronDown, Loader, Clock, Undo2 } from 'lucide-react';
+import { CheckCircle, AlertCircle, Filter, ChevronDown, Loader, Clock, Undo2 } from 'lucide-react';
 import { supabase } from '@/client/lib/supabase';
 
 // 仕訳承認の行データ
