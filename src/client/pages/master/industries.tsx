@@ -116,32 +116,51 @@ export default function IndustriesPage() {
     if (error) alert('削除に失敗しました: ' + error.message); else loadData();
   };
 
+  const getLevel = (id: string): number => {
+    let level = 0;
+    let current = industries.find(i => i.id === id);
+    while (current?.parent_id) {
+      level++;
+      current = industries.find(i => i.id === current!.parent_id);
+    }
+    return level;
+  };
+
   const getLevelLabel = (parentId: string) => {
-    if (!parentId) return '業界（Level 1）';
-    const parent = industries.find(i => i.id === parentId);
-    if (!parent?.parent_id) return '業種（Level 2）';
-    return 'ジャンル（Level 3）';
+    if (!parentId) return 'Level 1（ルート）';
+    const parentLevel = getLevel(parentId);
+    return `Level ${parentLevel + 2}`;
   };
 
   const parentOptions = useMemo(() => {
-    const level1 = industries.filter(i => !i.parent_id);
-    const options: Array<{ id: string; name: string; level: string }> = [];
-    level1.forEach(l1 => {
-      options.push({ id: l1.id, name: l1.name, level: '業界' });
-      industries.filter(i => i.parent_id === l1.id).forEach(l2 => {
-        options.push({ id: l2.id, name: `  └ ${l2.name}`, level: '業種' });
-      });
-    });
+    const options: Array<{ id: string; name: string; level: number }> = [];
+    const buildOptions = (parentId: string | null, level: number) => {
+      industries
+        .filter(i => i.parent_id === parentId)
+        .forEach(i => {
+          const indent = '　'.repeat(level);
+          const prefix = level === 0 ? '📁 ' : '└ ';
+          options.push({ id: i.id, name: `${indent}${prefix}${i.name}`, level });
+          buildOptions(i.id, level + 1);
+        });
+    };
+    buildOptions(null, 0);
     return options;
   }, [industries]);
 
-  const level1Count = industries.filter(i => !i.parent_id).length;
-  const level2Count = industries.filter(i => i.parent_id && industries.find(p => p.id === i.parent_id && !p.parent_id)).length;
-  const level3Count = industries.filter(i => {
-    if (!i.parent_id) return false;
-    const parent = industries.find(p => p.id === i.parent_id);
-    return parent?.parent_id != null;
-  }).length;
+  const levelCounts = useMemo(() => {
+    const counts: Record<number, number> = {};
+    const countByLevel = (parentId: string | null, level: number) => {
+      industries.filter(i => i.parent_id === parentId).forEach(i => {
+        counts[level] = (counts[level] || 0) + 1;
+        countByLevel(i.id, level + 1);
+      });
+    };
+    countByLevel(null, 0);
+    return counts;
+  }, [industries]);
+
+  const maxLevel = Math.max(0, ...Object.keys(levelCounts).map(Number));
 
   // ★ selectedNode は early return の【前】に配置（Reactフックルール）
   const selectedNode = useMemo(() => {
@@ -196,7 +215,9 @@ export default function IndustriesPage() {
         <button onClick={() => navigate(-1)} className="p-2 hover:bg-gray-100 rounded-lg"><ArrowLeft size={20} className="text-gray-700" /></button>
         <div className="flex-1">
           <h1 className="text-2xl font-bold text-gray-900">業種管理</h1>
-          <p className="text-sm text-gray-500 mt-1">業界 → 業種 → ジャンルの3階層（{level1Count}業界 / {level2Count}業種 / {level3Count}ジャンル）</p>
+          <p className="text-sm text-gray-500 mt-1">
+            {maxLevel + 1}階層構成（{Object.entries(levelCounts).map(([lv, cnt]) => `L${Number(lv) + 1}: ${cnt}件`).join(' / ')}）
+          </p>
         </div>
         {canEdit && (
           <button onClick={() => handleOpenNewModal()} className="flex items-center gap-2 btn-primary"><Plus size={18} /> 新規追加</button>
@@ -243,16 +264,38 @@ export default function IndustriesPage() {
                 <div>
                   <div className="flex items-center gap-2">
                     <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
-                      selectedNode.level === 0 ? 'bg-blue-100 text-blue-700' : selectedNode.level === 1 ? 'bg-cyan-100 text-cyan-700' : 'bg-gray-100 text-gray-600'
-                    }`}>{selectedNode.level === 0 ? '業界' : selectedNode.level === 1 ? '業種' : 'ジャンル'}</span>
+                      selectedNode.level === 0 ? 'bg-blue-100 text-blue-700' : selectedNode.level === 1 ? 'bg-cyan-100 text-cyan-700' : selectedNode.level === 2 ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-600'
+                    }`}>Level {selectedNode.level + 1}</span>
                     <h2 className="text-lg font-bold text-gray-900">{selectedNode.name}</h2>
+                    {/* パンくずリスト */}
+                    {(() => {
+                      const breadcrumb: Array<{ id: string; name: string }> = [];
+                      let current: Industry | undefined = industries.find(i => i.id === selectedNode.id);
+                      while (current?.parent_id) {
+                        const parent = industries.find(i => i.id === current!.parent_id);
+                        if (parent) breadcrumb.unshift({ id: parent.id, name: parent.name });
+                        current = parent;
+                      }
+                      return breadcrumb.length > 0 ? (
+                        <div className="flex items-center gap-1 mt-1 text-xs text-gray-400">
+                          {breadcrumb.map((b, i) => (
+                            <React.Fragment key={b.id}>
+                              {i > 0 && <span>/</span>}
+                              <button onClick={() => setSelectedId(b.id)} className="hover:text-blue-600 hover:underline">{b.name}</button>
+                            </React.Fragment>
+                          ))}
+                          <span>/</span>
+                          <span className="text-gray-600">{selectedNode.name}</span>
+                        </div>
+                      ) : null;
+                    })()}
                     <span className="text-xs font-mono text-gray-400">{selectedNode.code}</span>
                   </div>
                   {selectedNode.description && <p className="text-sm text-gray-600 mt-1">{selectedNode.description}</p>}
                 </div>
                 {canEdit && (
                   <div className="flex gap-1.5">
-                    {selectedNode.level < 2 && (
+                    {(
                       <button onClick={() => handleOpenNewModal(selectedNode.id)}
                         className="flex items-center gap-1 px-3 py-1.5 text-xs bg-green-50 text-green-700 border border-green-200 rounded-lg hover:bg-green-100">
                         <Plus size={14} />子項目を追加</button>
@@ -275,7 +318,7 @@ export default function IndustriesPage() {
 
               {selectedNode.children.length > 0 && (
                 <div>
-                  <h3 className="text-sm font-semibold text-gray-700 mb-3">{selectedNode.level === 0 ? '業種' : 'ジャンル'}一覧</h3>
+                  <h3 className="text-sm font-semibold text-gray-700 mb-3">子項目一覧（{selectedNode.children.length}件）</h3>
                   <div className="grid grid-cols-2 gap-3">
                     {selectedNode.children.map(child => (
                       <div key={child.id} onClick={() => { setSelectedId(child.id); setExpanded(prev => new Set([...prev, selectedNode.id])); }}
@@ -295,7 +338,7 @@ export default function IndustriesPage() {
                 </div>
               )}
 
-              {selectedNode.children.length === 0 && selectedNode.level < 2 && canEdit && (
+              {selectedNode.children.length === 0 && canEdit && (
                 <div className="text-center py-8 text-gray-400">
                   <p className="text-sm mb-2">子項目がまだありません</p>
                   <button onClick={() => handleOpenNewModal(selectedNode.id)} className="text-sm text-blue-600 hover:underline">+ 子項目を追加</button>
@@ -313,7 +356,7 @@ export default function IndustriesPage() {
             <label className="block text-sm font-medium text-gray-700 mb-1">親項目</label>
             <select value={formData.parent_id} onChange={e => setFormData(p => ({ ...p, parent_id: e.target.value }))} className="input">
               <option value="">なし（業界として登録）</option>
-              {parentOptions.map(o => (<option key={o.id} value={o.id}>{o.level === '業界' ? `📁 ${o.name}` : o.name}</option>))}
+              {parentOptions.map(o => (<option key={o.id} value={o.id}>{o.name}</option>))}
             </select>
           </div>
           <div className="grid grid-cols-2 gap-4">
