@@ -19,6 +19,7 @@ import {
   User,
   Store,
   Package,
+  ClipboardCheck
 } from 'lucide-react';
 import { useAuth } from '../../main';
 import { auth } from '../../lib/supabase';
@@ -168,6 +169,21 @@ function Sidebar() {
                   <Users size={18} />
                 </span>
                 <span>顧客一覧</span>
+              </Link>
+
+              {/* 承認ダッシュボード */}
+              <Link
+                to="/approvals"
+                className={`flex items-center gap-2 px-3 py-2 ml-2 text-sm rounded-md transition-colors ${
+                  isActive('/approvals')
+                    ? 'bg-blue-50 text-blue-700 font-medium'
+                    : 'text-gray-700 hover:bg-gray-100'
+                }`}
+              >
+                <span className={isActive('/approvals') ? 'text-blue-600' : 'text-gray-500'}>
+                  <ClipboardCheck size={18} />
+                </span>
+                <span>承認ダッシュボード</span>
               </Link>
 
               {/* ワークフロー系サブメニュー */}

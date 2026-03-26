@@ -26,6 +26,7 @@ import IndustriesPage from './pages/master/industries';
 import SuppliersPage from './pages/master/suppliers';
 import ItemsPage from './pages/master/items';
 import SettingsPage from './pages/settings';
+import ApprovalsPage from './pages/approvals';
 
 // ============================================================
 // Auth Context（認証状態管理）
@@ -144,6 +145,7 @@ function App() {
                       <Route path="/master/industries" element={<IndustriesPage />} />
                       <Route path="/master/suppliers" element={<SuppliersPage />} />
                       <Route path="/master/items" element={<ItemsPage />} />
+                      <Route path="/approvals" element={<ApprovalsPage />} />
                       <Route path="/settings" element={<SettingsPage />} />
 
                       {/* 404 */}
