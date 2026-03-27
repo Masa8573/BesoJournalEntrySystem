@@ -188,6 +188,17 @@ interface DocumentWithEntry {
 }
 interface TaxRateOption { id: string; rate: number; name: string; is_current: boolean; }
 
+// multi_entry: 1ドキュメント→N仕訳のグループ表示用
+interface MultiEntryGroup {
+  documentId: string;
+  fileName: string;
+  storagePath: string;
+  entries: EntryRow[];
+  totalAmount: number;
+  uncheckedCount: number;
+  isExpanded: boolean;
+}
+
 type ViewMode = 'list' | 'detail';
 type TabFilter = 'all' | 'unchecked' | 'reviewed' | 'excluded';
 
@@ -216,6 +227,8 @@ export default function ReviewPage() {
 
   // 一覧 state
   const [entries, setEntries] = useState<EntryRow[]>([]);
+  const [multiEntryGroups, setMultiEntryGroups] = useState<MultiEntryGroup[]>([]);
+  const [expandedDocs, setExpandedDocs] = useState<Set<string>>(new Set());
 
   // 個別チェック state
   const [items, setItems] = useState<DocumentWithEntry[]>([]);
@@ -266,19 +279,45 @@ export default function ReviewPage() {
       .eq('client_id', clientId).in('document_id', docIds)
       .in('status', ['draft', 'reviewed', 'approved', 'posted', 'amended']);
 
-    // documentsの順序（アップロード順）に合わせてソート
-    const mappedEntries: EntryRow[] = docIds.map(docId => {
-      const entry = (entriesData || []).find((e: any) => e.document_id === docId);
-      if (!entry) return null;
-      const dl = entry.journal_entry_lines?.find((l: any) => l.debit_credit === 'debit') || entry.journal_entry_lines?.[0];
-      return { ...entry, lines: entry.journal_entry_lines || [],
-        accountItemName: (() => { const ai = dl?.account_item as any; return Array.isArray(ai) ? ai[0]?.name : ai?.name; })(),
-        taxCategoryName: (() => { const tc = dl?.tax_category as any; return Array.isArray(tc) ? tc[0]?.name : tc?.name; })(),
-        amount: dl?.amount };
-    }).filter(Boolean) as unknown as EntryRow[];
+    // documentsの順序（アップロード順）に合わせてソート — 1ドキュメント→N仕訳に対応
+    const mappedEntries: EntryRow[] = docIds.flatMap(docId => {
+      const docEntries = (entriesData || []).filter((e: any) => e.document_id === docId);
+      if (docEntries.length === 0) return [];
+      return docEntries.map((entry: any) => {
+        const dl = entry.journal_entry_lines?.find((l: any) => l.debit_credit === 'debit') || entry.journal_entry_lines?.[0];
+        return { ...entry, lines: entry.journal_entry_lines || [],
+          accountItemName: (() => { const ai = dl?.account_item as any; return Array.isArray(ai) ? ai[0]?.name : ai?.name; })(),
+          taxCategoryName: (() => { const tc = dl?.tax_category as any; return Array.isArray(tc) ? tc[0]?.name : tc?.name; })(),
+          amount: dl?.amount };
+      });
+    }) as unknown as EntryRow[];
     // ソート統一（取引日→摘要）
     mappedEntries.sort((a, b) => (a.entry_date || '').localeCompare(b.entry_date || '') || (a.description || '').localeCompare(b.description || ''));
     setEntries(mappedEntries);
+
+    // multi_entry: 1ドキュメントに複数仕訳があるグループを検出
+    const docEntryMap = new Map<string, EntryRow[]>();
+    for (const entry of mappedEntries) {
+      if (!entry.document_id) continue;
+      const existing = docEntryMap.get(entry.document_id) || [];
+      existing.push(entry);
+      docEntryMap.set(entry.document_id, existing);
+    }
+    const groups: MultiEntryGroup[] = [];
+    for (const [docId, docEntries] of docEntryMap) {
+      if (docEntries.length <= 1) continue;
+      const doc = docs.find((d: any) => d.id === docId);
+      groups.push({
+        documentId: docId,
+        fileName: doc?.original_file_name || doc?.file_name || '',
+        storagePath: doc?.storage_path || doc?.file_path || '',
+        entries: docEntries,
+        totalAmount: docEntries.reduce((sum, e) => sum + (e.amount || 0), 0),
+        uncheckedCount: docEntries.filter(e => e.status === 'draft').length,
+        isExpanded: false,
+      });
+    }
+    setMultiEntryGroups(groups);
 
     // 個別用
     const { data: entriesForDetail } = await supabase
@@ -649,6 +688,27 @@ export default function ReviewPage() {
   };
 
   // ============================================
+  // multi_entry: グループ展開/折りたたみ
+  // ============================================
+  const toggleMultiEntryGroup = (docId: string) => {
+    setExpandedDocs(prev => {
+      const next = new Set(prev);
+      if (next.has(docId)) next.delete(docId); else next.add(docId);
+      return next;
+    });
+  };
+
+  const handleBulkReviewGroup = async (docId: string) => {
+    const group = multiEntryGroups.find(g => g.documentId === docId);
+    if (!group) return;
+    const draftIds = group.entries.filter(e => e.status === 'draft').map(e => e.id);
+    if (draftIds.length === 0) return;
+    const targetStatus = isManagerOrAdmin ? 'approved' : 'reviewed';
+    await supabase.from('journal_entries').update({ status: targetStatus }).in('id', draftIds);
+    await loadAllData();
+  };
+
+  // ============================================
   // C5: ショートカットキー（全面拡張）
   // ============================================
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
@@ -894,52 +954,133 @@ export default function ReviewPage() {
                   <tbody className="divide-y divide-gray-100">
                     {filteredEntries.length === 0 ? (
                       <tr><td colSpan={7} className="px-4 py-12 text-center text-gray-400">データがありません</td></tr>
-                    ) : filteredEntries.map((entry, idx) => {
-                      const needsReview = entry.requires_review || (entry.ai_confidence != null && entry.ai_confidence < 0.7);
-                      const isSelected = items[currentIndex]?.entryId === entry.id;
-                      return (
-                        <tr key={entry.id} onClick={() => openDetail(entry.id)}
-                          className={`cursor-pointer transition-colors hover:bg-gray-50 ${needsReview ? 'bg-yellow-50' : ''} ${isSelected ? 'bg-blue-50' : ''} ${entry.status === 'approved' ? 'bg-green-50/30' : ''}`}>
-                          <td className="px-3 py-3 text-xs text-gray-400">{idx + 1}</td>
-                          <td className="px-4 py-3 text-sm">{new Date(entry.entry_date).toLocaleDateString('ja-JP')}</td>
-                          <td className="px-4 py-3 text-sm max-w-[200px] truncate">{entry.description || '-'}</td>
-                          <td className="px-4 py-3 text-sm">{entry.accountItemName || '-'}</td>
-                          <td className="px-4 py-3 text-sm">{entry.taxCategoryName || '-'}</td>
-                          <td className="px-4 py-3 text-sm text-right font-semibold tabular-nums">{fmt(entry.amount)}</td>
-                          <td className="px-4 py-3 text-center">
-                            {entry.is_excluded ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700"><Ban size={10} />対象外</span>
-                            ) : entry.status === 'posted' ? (
-                              <div className="flex items-center justify-center gap-1.5">
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800"><CheckCircle size={10} />確定</span>
-                                <button onClick={(e) => { e.stopPropagation(); handleRevert(entry.id, 'posted'); }}
-                                  className="p-0.5 text-purple-500 hover:bg-purple-50 rounded" title="確定解除"><Undo2 size={12} /></button>
-                              </div>
-                            ) : entry.status === 'reviewed' ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">
-                                <Clock size={10} />確認済み
-                                {isManagerOrAdmin && (
-                                  <button onClick={(e) => { e.stopPropagation(); handleApproveFromList(entry.id); }}
-                                    className="ml-1 px-1.5 py-0.5 bg-green-500 text-white rounded text-[10px] hover:bg-green-600">
-                                    承認
+                    ) : (() => {
+                      const renderedDocIds = new Set<string>();
+                      const rows: React.ReactNode[] = [];
+                      let rowNum = 0;
+
+                      filteredEntries.forEach((entry) => {
+                        const docId = entry.document_id || '';
+                        const group = multiEntryGroups.find(g => g.documentId === docId);
+                        const isMulti = group && group.entries.length > 1;
+
+                        // multi_entry: 親行（折りたたみ）を先に表示
+                        if (isMulti && !renderedDocIds.has(docId)) {
+                          renderedDocIds.add(docId);
+                          rowNum++;
+                          const isExpanded = expandedDocs.has(docId);
+                          rows.push(
+                            <tr key={`group-${docId}`}
+                              onClick={() => toggleMultiEntryGroup(docId)}
+                              className="cursor-pointer bg-indigo-50/50 hover:bg-indigo-50 transition-colors border-l-4 border-indigo-400">
+                              <td className="px-3 py-3 text-xs text-gray-400">{rowNum}</td>
+                              <td className="px-4 py-3 text-sm" colSpan={2}>
+                                <div className="flex items-center gap-2">
+                                  <ChevronDown size={14} className={`text-indigo-500 transition-transform ${isExpanded ? '' : '-rotate-90'}`} />
+                                  <span className="font-medium text-indigo-700">{group.fileName}</span>
+                                  <span className="text-xs px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-600 font-medium">{group.entries.length}件</span>
+                                  {group.uncheckedCount > 0 && (
+                                    <span className="text-xs px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-600">未確認{group.uncheckedCount}</span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-4 py-3 text-sm text-gray-500">明細</td>
+                              <td className="px-4 py-3 text-sm text-right font-semibold tabular-nums">{fmt(group.totalAmount)}</td>
+                              <td className="px-4 py-3 text-center">
+                                {group.uncheckedCount > 0 && (
+                                  <button onClick={(e) => { e.stopPropagation(); handleBulkReviewGroup(docId); }}
+                                    className="px-2 py-1 bg-blue-500 text-white rounded text-[10px] hover:bg-blue-600 font-medium">
+                                    全て確認済みに
                                   </button>
                                 )}
-                              </span>
-                            ) : entry.status === 'approved' ? (
-                              <div className="flex items-center justify-center gap-1.5">
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800"><CheckCircle size={10} />承認済</span>
-                                <button onClick={(e) => { e.stopPropagation(); handleRevert(entry.id, 'approved'); }}
-                                  className="p-0.5 text-green-500 hover:bg-green-50 rounded" title="差し戻し"><Undo2 size={12} /></button>
-                              </div>
-                            ) : needsReview ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800"><AlertCircle size={10} />要確認</span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">未確認</span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
+                              </td>
+                            </tr>
+                          );
+
+                          // multi_entry子行: 展開時のみ表示
+                          if (isExpanded) {
+                            group.entries.forEach((childEntry) => {
+                              const needsReview = childEntry.requires_review || (childEntry.ai_confidence != null && childEntry.ai_confidence < 0.7);
+                              rows.push(
+                                <tr key={childEntry.id} onClick={() => openDetail(childEntry.id)}
+                                  className={`cursor-pointer transition-colors hover:bg-gray-50 bg-white border-l-4 border-indigo-200 ${needsReview ? 'bg-yellow-50' : ''}`}>
+                                  <td className="px-3 py-2 text-xs text-gray-300 pl-6">-</td>
+                                  <td className="px-4 py-2 text-sm text-gray-600">{new Date(childEntry.entry_date).toLocaleDateString('ja-JP')}</td>
+                                  <td className="px-4 py-2 text-sm max-w-[200px] truncate">{childEntry.description || '-'}</td>
+                                  <td className="px-4 py-2 text-sm">{childEntry.accountItemName || '-'}</td>
+                                  <td className="px-4 py-2 text-sm">{childEntry.taxCategoryName || '-'}</td>
+                                  <td className="px-4 py-2 text-sm text-right tabular-nums">{fmt(childEntry.amount)}</td>
+                                  <td className="px-4 py-2 text-center">
+                                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
+                                      childEntry.status === 'approved' ? 'bg-green-100 text-green-800' :
+                                      childEntry.status === 'posted' ? 'bg-purple-100 text-purple-800' :
+                                      childEntry.status === 'reviewed' ? 'bg-yellow-100 text-yellow-700' :
+                                      'bg-gray-100 text-gray-600'
+                                    }`}>{
+                                      childEntry.status === 'approved' ? '承認済' :
+                                      childEntry.status === 'posted' ? '確定' :
+                                      childEntry.status === 'reviewed' ? '確認済み' : '未確認'
+                                    }</span>
+                                  </td>
+                                </tr>
+                              );
+                            });
+                          }
+                          return;
+                        }
+
+                        // multi_entry子行は親行で処理済みならスキップ
+                        if (isMulti && renderedDocIds.has(docId)) return;
+
+                        // 通常行（1ドキュメント=1仕訳）
+                        rowNum++;
+                        const needsReview = entry.requires_review || (entry.ai_confidence != null && entry.ai_confidence < 0.7);
+                        const isSelected = items[currentIndex]?.entryId === entry.id;
+                        rows.push(
+                          <tr key={entry.id} onClick={() => openDetail(entry.id)}
+                            className={`cursor-pointer transition-colors hover:bg-gray-50 ${needsReview ? 'bg-yellow-50' : ''} ${isSelected ? 'bg-blue-50' : ''} ${entry.status === 'approved' ? 'bg-green-50/30' : ''}`}>
+                            <td className="px-3 py-3 text-xs text-gray-400">{rowNum}</td>
+                            <td className="px-4 py-3 text-sm">{new Date(entry.entry_date).toLocaleDateString('ja-JP')}</td>
+                            <td className="px-4 py-3 text-sm max-w-[200px] truncate">{entry.description || '-'}</td>
+                            <td className="px-4 py-3 text-sm">{entry.accountItemName || '-'}</td>
+                            <td className="px-4 py-3 text-sm">{entry.taxCategoryName || '-'}</td>
+                            <td className="px-4 py-3 text-sm text-right font-semibold tabular-nums">{fmt(entry.amount)}</td>
+                            <td className="px-4 py-3 text-center">
+                              {entry.is_excluded ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700"><Ban size={10} />対象外</span>
+                              ) : entry.status === 'posted' ? (
+                                <div className="flex items-center justify-center gap-1.5">
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800"><CheckCircle size={10} />確定</span>
+                                  <button onClick={(e) => { e.stopPropagation(); handleRevert(entry.id, 'posted'); }}
+                                    className="p-0.5 text-purple-500 hover:bg-purple-50 rounded" title="確定解除"><Undo2 size={12} /></button>
+                                </div>
+                              ) : entry.status === 'reviewed' ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">
+                                  <Clock size={10} />確認済み
+                                  {isManagerOrAdmin && (
+                                    <button onClick={(e) => { e.stopPropagation(); handleApproveFromList(entry.id); }}
+                                      className="ml-1 px-1.5 py-0.5 bg-green-500 text-white rounded text-[10px] hover:bg-green-600">
+                                      承認
+                                    </button>
+                                  )}
+                                </span>
+                              ) : entry.status === 'approved' ? (
+                                <div className="flex items-center justify-center gap-1.5">
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800"><CheckCircle size={10} />承認済</span>
+                                  <button onClick={(e) => { e.stopPropagation(); handleRevert(entry.id, 'approved'); }}
+                                    className="p-0.5 text-green-500 hover:bg-green-50 rounded" title="差し戻し"><Undo2 size={12} /></button>
+                                </div>
+                              ) : needsReview ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800"><AlertCircle size={10} />要確認</span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">未確認</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      });
+                      return rows;
+                    })()}
                   </tbody>
                 </table>
               )}

@@ -64,26 +64,30 @@ export function WorkflowProvider({ children }: WorkflowProviderProps) {
     // 既に同じクライアントのワークフローがロード済みならスキップ
     if (currentWorkflow?.clientId === clientIdFromPath) return;
 
+    let cancelled = false;
     workflowsApi.getByClient(clientIdFromPath).then((workflow) => {
-      if (workflow) {
+      if (!cancelled && workflow) {
         setCurrentWorkflow(workflow);
       }
     });
-  }, [clientIdFromPath]); // eslint-disable-line react-hooks/exhaustive-deps
+    return () => { cancelled = true; };
+  }, [clientIdFromPath, currentWorkflow?.clientId]);
 
   // H4: URLパスが変わった時にcurrentStepを同期
   useEffect(() => {
     if (!currentWorkflow) return;
     const stepFromPath = getStepFromPath(location.pathname);
     if (stepFromPath && stepFromPath !== currentWorkflow.currentStep) {
+      let cancelled = false;
       // DB更新（navigateは不要、既にそのページにいる）
       workflowsApi.update(currentWorkflow.id, { currentStep: stepFromPath }).then(updated => {
-        if (updated) {
+        if (!cancelled && updated) {
           setCurrentWorkflow({ ...updated, clientName: currentWorkflow.clientName });
         }
       });
+      return () => { cancelled = true; };
     }
-  }, [location.pathname]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [location.pathname, currentWorkflow]);
 
   // ============================================
   // 新規ワークフロー開始

@@ -1,6 +1,9 @@
 import { GoogleGenAI } from '@google/genai';
 
 // Gemini APIクライアントの初期化（新SDK: @google/genai）
+if (!process.env.GEMINI_API_KEY) {
+  console.error('FATAL: GEMINI_API_KEY が設定されていません。OCR・仕訳生成が動作しません。');
+}
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
 // 使用モデル（用途別に分離）
@@ -124,6 +127,98 @@ export interface OCRResult {
   extracted_payment_method: string | null;
   extracted_invoice_number: string | null;
   confidence_score: number;
+}
+
+/**
+ * Step 1: 証憑種別の自動判定（Gemini Flash）
+ * 証憑画像をGemini Flashに送り、document_typesの25種別から最適なものを判定。
+ * confidence >= 0.8 かつ requires_journal=false なら、Step 2（フルOCR）をスキップ可能。
+ */
+export async function classifyDocument(
+  imageBase64: string,
+  mimeType: string
+): Promise<{
+  document_type_code: string;
+  confidence: number;
+  estimated_lines: number;
+  description: string;
+}> {
+  const prompt = `あなたは日本の税理士事務所で使われる証憑分類AIです。
+以下の画像を分析し、証憑の種別を判定してください。
+
+選択肢（codeで回答）:
+【仕訳対象】
+receipt: レシート/領収書
+invoice: 請求書
+bank_statement: 銀行通帳
+credit_card: クレカ明細
+etc_statement: ETC利用明細
+e_money_statement: 電子マネー/QR決済
+expense_report: 経費精算書
+payroll: 給与明細
+sales_report: 売上集計表/レジ日報
+payment_notice: 支払通知書
+other_journal: その他仕訳対象
+
+【非仕訳対象】
+medical: 医療費
+deduction_cert: 控除証明書
+housing_loan: 住宅ローン
+mynumber: マイナンバー
+id_card: 免許証/保険証
+other_deduction: その他控除
+contract: 契約書
+estimate: 見積書
+purchase_order: 発注書
+delivery_note: 納品書
+insurance_policy: 保険証券
+registry: 登記簿謄本
+minutes: 議事録
+other_ref: その他書類
+
+以下のJSON形式で回答してください（JSON以外は出力しないでください）:
+{
+  "document_type_code": "receipt",
+  "confidence": 0.95,
+  "estimated_lines": 1,
+  "description": "コンビニのレシート"
+}
+
+- confidence: 0.0〜1.0の確信度
+- estimated_lines: 推定取引行数（レシート=1、通帳=複数行）
+- description: 簡潔な説明`;
+
+  try {
+    const response = await callGeminiWithRetry(() => ai.models.generateContent({
+      model: GEMINI_MODEL_OCR,
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { inlineData: { mimeType, data: imageBase64 } },
+            { text: prompt },
+          ],
+        },
+      ],
+    }), '証憑分類');
+
+    const text = response.text?.replace(/```json\n?|```\n?/g, '').trim() || '';
+    const parsed = JSON.parse(text);
+    return {
+      document_type_code: parsed.document_type_code || 'other_ref',
+      confidence: Math.min(1, Math.max(0, parsed.confidence || 0)),
+      estimated_lines: parsed.estimated_lines || 1,
+      description: parsed.description || '',
+    };
+  } catch (error) {
+    console.error('[classifyDocument] 証憑種別判定エラー:', error);
+    return {
+      document_type_code: 'other_journal',
+      confidence: 0.3,
+      estimated_lines: 1,
+      description: 'AI判定失敗',
+    };
+  }
 }
 
 export async function processOCR(imageUrl: string): Promise<OCRResult> {
@@ -279,6 +374,88 @@ export async function processOCR(imageUrl: string): Promise<OCRResult> {
 }
 
 // ============================================
+// 明細分割エンジン: statement_extract パターン
+// ============================================
+
+/**
+ * 明細分割エンジン: statement_extract パターンの証憑から複数取引を抽出
+ * 通帳、クレカ明細、ETC明細、経費精算書等に使用。
+ * Gemini Proに全ページ画像を一括送信→各行のデータを配列で返却。
+ */
+export async function extractMultipleEntries(
+  imageBase64: string,
+  mimeType: string,
+  documentType: string,
+  industryPath?: string
+): Promise<Array<{
+  date: string;
+  description: string;
+  amount: number;
+  counterparty: string | null;
+  is_income: boolean;
+  suggested_account_name: string | null;
+  tax_rate: number | null;
+  confidence: number;
+}>> {
+  const typeHints: Record<string, string> = {
+    bank_statement: '銀行通帳の入出金明細です。各行の日付・摘要・入金額または出金額を抽出してください。',
+    credit_card: 'クレジットカードの利用明細です。各行の利用日・利用先・金額を抽出してください。',
+    etc_statement: 'ETC利用明細です。各行の利用日・IC名・金額を抽出してください。',
+    e_money_statement: '電子マネー/QR決済の利用明細です。各行の日付・利用先・金額を抽出してください。',
+    expense_report: '経費精算書です。各行の日付・項目・金額を抽出してください。',
+  };
+
+  const hint = typeHints[documentType] || '明細書です。各行のデータを抽出してください。';
+  const industryContext = industryPath ? `\n- 業種階層: ${industryPath}` : '';
+
+  const prompt = `あなたは日本の税理士事務所のOCR解析AIです。
+${hint}
+${industryContext}
+
+各取引行を以下のJSON配列で返してください（JSON以外は出力しないでください）:
+[
+  {
+    "date": "2024-03-15",
+    "description": "摘要/利用先",
+    "amount": 1500,
+    "counterparty": "取引先名（不明ならnull）",
+    "is_income": false,
+    "suggested_account_name": "推定される勘定科目名（不明ならnull）",
+    "tax_rate": 0.10,
+    "confidence": 0.85
+  }
+]
+
+- date: YYYY-MM-DD形式
+- amount: 正の数値（円単位、税込）
+- is_income: 入金/売上ならtrue、出金/支出ならfalse
+- suggested_account_name: 日本の勘定科目名（例: 旅費交通費、消耗品費、売上高）
+- confidence: 各行の抽出確信度（0.0〜1.0）
+- 読み取れない行はconfidence=0.3以下で含める`;
+
+  try {
+    const response = await callGeminiWithRetry(() => ai.models.generateContent({
+      model: GEMINI_MODEL_JOURNAL,
+      contents: [{
+        role: 'user',
+        parts: [
+          { inlineData: { mimeType, data: imageBase64 } },
+          { text: prompt },
+        ],
+      }],
+    }), '明細分割');
+
+    const text = response.text?.replace(/```json\n?|```\n?/g, '').trim() || '[]';
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) return [];
+    return parsed;
+  } catch (error) {
+    console.error('[extractMultipleEntries] 明細分割エラー:', error);
+    return [];
+  }
+}
+
+// ============================================
 // AI仕訳生成サービス
 // ============================================
 
@@ -408,6 +585,36 @@ ${taxCategoryList}
 6. 摘要は「取引先名 品目」の形式で、事務所の税理士が見て一目でわかるように書くこと。
 7. 事業用かプライベートかは、取引先名・品目・業種から総合的に判断すること。
 8. プライベートと判断した場合は、借方を「事業主貸」にすること。
+
+【複合仕訳パターン】
+複合仕訳が必要な場合は、以下のパターンを参考にlines配列に3行以上を含めてください:
+
+パターンA（源泉所得税あり）:
+  借方: 外注費 + 仮払消費税
+  貸方: 普通預金 + 預り金（源泉所得税）
+
+パターンB（家事按分）:
+  借方: 該当科目（事業用分） + 事業主貸（私用分）
+  貸方: 現金/未払金
+
+パターンC（借入金返済）:
+  借方: 借入金 + 支払利息
+  貸方: 普通預金
+
+パターンD（給与支払い）:
+  借方: 給与手当
+  貸方: 普通預金 + 預り金（所得税） + 預り金（住民税） + 預り金（社会保険料）
+
+パターンE（報酬受取）:
+  借方: 普通預金 + 事業主貸（源泉徴収分）
+  貸方: 売上高 + 仮受消費税
+
+パターンF（カード引落し精算）:
+  借方: 未払金
+  貸方: 普通預金
+
+重要: 借方合計 = 貸方合計 を必ず守ること。
+1円以上の差異がある場合は貸方最終行で調整し、requires_manual_review: true を設定すること。
 
 JSONのみを返してください。`;
 

@@ -27,6 +27,7 @@ import SuppliersPage from './pages/master/suppliers';
 import ItemsPage from './pages/master/items';
 import SettingsPage from './pages/settings';
 import ApprovalsPage from './pages/approvals';
+import UploadOnlyPage from './pages/uploadOnly';
 
 // ============================================================
 // Auth Context（認証状態管理）
@@ -111,6 +112,13 @@ function App() {
         <Routes>
           {/* ─── 公開ルート（認証不要）───────────────────── */}
           <Route path="/login" element={<LoginPage />} />
+
+          {/* ─── viewer専用（Layout外）───────────────────── */}
+          <Route path="/upload-only" element={
+            <PrivateRoute>
+              <UploadOnlyPage />
+            </PrivateRoute>
+          } />
 
           {/* ─── 保護ルート（認証必須）───────────────────── */}
           <Route

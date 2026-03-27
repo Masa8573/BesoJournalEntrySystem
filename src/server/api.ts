@@ -10,10 +10,16 @@ import {
   mapLinesToDBFormat,
   matchProcessingRules,
   buildEntryFromRule,
+  classifyDocument,
+  extractMultipleEntries,
 } from './services.js';
 import type { AccountItemRef, TaxCategoryRef, GeneratedJournalEntry } from './services.js';
 
 const router = express.Router();
+
+// UUID形式バリデーション
+const isValidUUID = (str: string): boolean =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
 
 // ============================================
 // Supabase サーバーサイドクライアント（service_role で RLS バイパス）
@@ -23,9 +29,9 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
 // 起動時の環境変数診断ログ
 console.log('=== Supabase 環境変数診断 ===');
-console.log(`  SUPABASE_URL:              ${supabaseUrl ? `${supabaseUrl.substring(0, 30)}...` : '❌ 未設定'}`);
+console.log(`  SUPABASE_URL:              ${supabaseUrl ? '✅ 設定済み' : '❌ 未設定'}`);
 console.log(`  VITE_SUPABASE_URL:         ${process.env.VITE_SUPABASE_URL ? '✅ 設定済み' : '（未設定 - フォールバック対象）'}`);
-console.log(`  SUPABASE_SERVICE_ROLE_KEY:  ${supabaseServiceKey ? `✅ 設定済み (${supabaseServiceKey.substring(0, 20)}...)` : '❌ 未設定'}`);
+console.log(`  SUPABASE_SERVICE_ROLE_KEY:  ${supabaseServiceKey ? '✅ 設定済み' : '❌ 未設定'}`);
 console.log('============================');
 
 if (!supabaseUrl) {
@@ -268,14 +274,75 @@ router.post('/ocr/process', async (req: Request, res: Response) => {
     if (!document_id || !targetUrl) {
       return res.status(400).json({ error: 'document_idとfile_url（またはfile_path）は必須です' });
     }
+    if (!isValidUUID(document_id)) {
+      return res.status(400).json({ error: 'document_idが不正な形式です' });
+    }
 
     console.log(`[OCR] 処理開始: document_id="${document_id}"`);
+
+    // Step 0: 画像をBase64に変換（classifyDocumentでも使用）
+    const fetchRes = await fetch(targetUrl);
+    if (!fetchRes.ok) throw new Error(`画像の取得に失敗: ${fetchRes.status}`);
+    const arrayBuffer = await fetchRes.arrayBuffer();
+    const imageBase64 = Buffer.from(arrayBuffer).toString('base64');
+    const contentType = fetchRes.headers.get('content-type') || 'image/jpeg';
+    const ext = targetUrl.split('?')[0].split('.').pop()?.toLowerCase();
+    const mimeType =
+      ext === 'pdf' || contentType.includes('pdf') ? 'application/pdf' :
+      ext === 'png' || contentType.includes('png') ? 'image/png' :
+      ext === 'webp' || contentType.includes('webp') ? 'image/webp' : 'image/jpeg';
+
+    // Step 1: 証憑種別の自動判定
+    const classification = await classifyDocument(imageBase64, mimeType);
+    console.log(`[OCR] Step 1 判定: ${classification.document_type_code} (confidence=${classification.confidence})`);
+
+    // documents テーブルに判定結果を保存
+    await supabaseAdmin.from('documents').update({
+      doc_classification: classification,
+      ocr_step1_type: classification.document_type_code,
+      ocr_step1_confidence: classification.confidence,
+      ocr_step: 'step1',
+    }).eq('id', document_id);
+
+    // document_type_id を設定（document_typesテーブルからcodeで検索）
+    const { data: docType } = await supabaseAdmin
+      .from('document_types')
+      .select('id, requires_journal')
+      .eq('code', classification.document_type_code)
+      .single();
+
+    if (docType) {
+      await supabaseAdmin.from('documents').update({
+        document_type_id: docType.id,
+      }).eq('id', document_id);
+
+      // 非仕訳対象 かつ confidence >= 0.8 → Step 2スキップ
+      if (!docType.requires_journal && classification.confidence >= 0.8) {
+        console.log(`[OCR] 非仕訳対象 (confidence=${classification.confidence}) → Step 2スキップ`);
+        await supabaseAdmin.from('documents').update({
+          ocr_status: 'completed',
+          ocr_step: 'step1',
+          status: 'excluded',
+        }).eq('id', document_id);
+        return res.json({
+          success: true,
+          skipped: true,
+          classification,
+          message: '非仕訳対象のためOCRスキップ',
+        });
+      }
+    }
+
+    // Step 2: フルOCR（既存のprocessOCR処理）に進む
+    await supabaseAdmin.from('documents').update({ ocr_step: 'step2' }).eq('id', document_id);
+
     const ocrResult = await processOCR(targetUrl);
     console.log(`[OCR] ✅ 完了: supplier="${ocrResult.extracted_supplier}", amount=${ocrResult.extracted_amount}, confidence=${ocrResult.confidence_score}`);
 
     res.json({
       success: true,
       message: 'OCR処理が完了しました',
+      classification,
       ocr_result: {
         id: `ocr-${Date.now()}`,
         document_id,
@@ -307,6 +374,9 @@ router.post('/journal-entries/generate', async (req: Request, res: Response) => 
       });
       return res.status(400).json({ error: '必須パラメータが不足しています' });
     }
+    if (!isValidUUID(document_id) || !isValidUUID(client_id)) {
+      return res.status(400).json({ error: 'document_id / client_id が不正な形式です' });
+    }
 
     // 1. organization_id を解決
     const organizationId = await getOrganizationId(client_id);
@@ -337,7 +407,97 @@ router.post('/journal-entries/generate', async (req: Request, res: Response) => 
     const itemsList = itemsData.data || [];
     console.log(`[仕訳生成] マスタ: 勘定科目=${accountItems.length}件, 税区分=${taxCategories.length}件, 取引先=${suppliers.length}件, 品目=${itemsList.length}件`);
 
-    // 2.5 ルールマッチング（B1: ルールが先、マッチしなければGemini）
+    // 2.5a statement_extract判定: 明細分割が必要な証憑種別か確認
+    const statementExtractTypes = ['bank_statement', 'credit_card', 'etc_statement', 'e_money_statement', 'expense_report'];
+    const docTypeCode = ocr_result.document_type || null;
+
+    // document_type_id から processing_pattern を取得
+    let processingPattern: string | null = null;
+    if (document_id) {
+      const { data: docRow } = await supabaseAdmin
+        .from('documents')
+        .select('document_type_id, storage_path, file_path')
+        .eq('id', document_id)
+        .single();
+      if (docRow?.document_type_id) {
+        const { data: dtRow } = await supabaseAdmin
+          .from('document_types')
+          .select('processing_pattern')
+          .eq('id', docRow.document_type_id)
+          .single();
+        processingPattern = dtRow?.processing_pattern || null;
+      }
+
+      // processing_pattern が statement_extract、またはdocument_typeが明細系 → 明細分割エンジン
+      if (processingPattern === 'statement_extract' || statementExtractTypes.includes(docTypeCode)) {
+        console.log(`[仕訳生成] 明細分割モード: pattern=${processingPattern}, type=${docTypeCode}`);
+
+        // 画像をBase64取得
+        const storagePath = docRow?.storage_path || docRow?.file_path || '';
+        let imageBase64 = '';
+        let mimeType = 'image/jpeg';
+        if (storagePath) {
+          const { data: signedUrlData } = await supabaseAdmin.storage.from('documents').createSignedUrl(storagePath, 600);
+          if (signedUrlData?.signedUrl) {
+            const imgRes = await fetch(signedUrlData.signedUrl);
+            const buf = await imgRes.arrayBuffer();
+            imageBase64 = Buffer.from(buf).toString('base64');
+            const ct = imgRes.headers.get('content-type') || '';
+            mimeType = ct.includes('pdf') ? 'application/pdf' : ct.includes('png') ? 'image/png' : 'image/jpeg';
+          }
+        }
+
+        if (imageBase64) {
+          const extractedLines = await extractMultipleEntries(imageBase64, mimeType, docTypeCode || 'bank_statement', industry);
+          console.log(`[仕訳生成] 明細分割完了: ${extractedLines.length}行`);
+
+          // 各行ごとに仕訳を生成してまとめて返却
+          const multiEntries = [];
+          for (const line of extractedLines) {
+            const lineEntry = await generateJournalEntry({
+              date: line.date || new Date().toISOString().split('T')[0],
+              supplier: line.counterparty || line.description || '不明',
+              amount: line.amount,
+              tax_amount: null,
+              tax_details: null,
+              items: null,
+              payment_method: docTypeCode === 'credit_card' ? 'credit_card' : docTypeCode === 'bank_statement' ? 'bank_transfer' : null,
+              invoice_number: null,
+              industry,
+              account_items: accountItems,
+              tax_categories: taxCategories,
+            });
+
+            const mappedLines = mapLinesToDBFormat(
+              lineEntry.lines, accountItems, taxCategories, fallbackAccountId, suppliers, supplierAliases, itemsList
+            );
+
+            multiEntries.push({
+              document_id,
+              client_id,
+              entry_date: line.date || new Date().toISOString().split('T')[0],
+              category: lineEntry.category,
+              notes: lineEntry.notes,
+              confidence: line.confidence,
+              reasoning: lineEntry.reasoning,
+              lines: mappedLines,
+              _raw_lines: lineEntry.lines,
+              rule_matched: false,
+              is_income: line.is_income,
+            });
+          }
+
+          return res.json({
+            success: true,
+            message: `明細分割: ${multiEntries.length}件の仕訳が生成されました`,
+            multi_entry: true,
+            journal_entries: multiEntries,
+          });
+        }
+      }
+    }
+
+    // 2.5b ルールマッチング（B1: ルールが先、マッチしなければGemini）
     const supplierName = ocr_result.extracted_supplier || '不明';
     const amount = ocr_result.extracted_amount || 0;
 
@@ -589,6 +749,9 @@ router.post('/process/batch', upload.array('files', 500), async (req: Request, r
       } catch (error: any) {
         console.error(`[バッチ] ❌ エラー (${file.originalname}):`, error.message);
         results.push({ file_name: file.originalname, success: false, error: error.message });
+      } finally {
+        // tempファイルをディスクから削除
+        try { fs.unlinkSync(file.path); } catch { /* already cleaned */ }
       }
     }
 
@@ -649,15 +812,6 @@ router.get('/health', async (req: Request, res: Response) => {
       VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL ? '✅' : '❌',
       SUPABASE_SERVICE_ROLE_KEY: supabaseServiceKey ? '✅' : '❌',
       GEMINI_API_KEY: process.env.GEMINI_API_KEY ? '✅' : '❌',
-    },
-    // デバッグ用（原因特定後に削除すること）
-    _debug_key_fingerprint: {
-      service_key_first10: supabaseServiceKey ? supabaseServiceKey.substring(0, 10) : 'EMPTY',
-      service_key_last5: supabaseServiceKey ? supabaseServiceKey.substring(supabaseServiceKey.length - 5) : 'EMPTY',
-      service_key_length: supabaseServiceKey.length,
-      anon_key_first10: (process.env.VITE_SUPABASE_ANON_KEY || '').substring(0, 10) || 'NOT_SET',
-      keys_are_different: supabaseServiceKey !== (process.env.VITE_SUPABASE_ANON_KEY || ''),
-      url_value: supabaseUrl,
     },
   });
 });

@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -7,6 +8,19 @@ import apiRouter from './api.js';
 
 // 環境変数を読み込み
 dotenv.config();
+
+// 必須環境変数の起動時チェック
+const requiredEnvVars = ['GEMINI_API_KEY', 'SUPABASE_SERVICE_ROLE_KEY'];
+const missingEnvVars = requiredEnvVars.filter(key => !process.env[key]);
+if (missingEnvVars.length > 0) {
+  console.error(`FATAL: 必須環境変数が未設定です: ${missingEnvVars.join(', ')}`);
+  console.error('サーバーを起動できません。.env ファイルまたはホスティング設定を確認してください。');
+  process.exit(1);
+}
+// SUPABASE_URL は VITE_SUPABASE_URL からのフォールバックがあるためwarningのみ
+if (!process.env.SUPABASE_URL && !process.env.VITE_SUPABASE_URL) {
+  console.warn('WARNING: SUPABASE_URL / VITE_SUPABASE_URL が未設定です。DB接続に失敗します。');
+}
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -25,7 +39,29 @@ app.use((req, res, next) => {
   next();
 });
 
+// レート制限（API全体: 15分間に100リクエスト）
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'リクエスト数が制限を超えました。しばらく待ってから再試行してください。' },
+});
+
+// Gemini呼び出しを含む高コストエンドポイント用（15分間に20リクエスト）
+const expensiveLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'AI処理のリクエスト数が制限を超えました。しばらく待ってから再試行してください。' },
+});
+
 // APIルートをマウント
+app.use('/api', apiLimiter);
+app.use('/api/ocr/process', expensiveLimiter);
+app.use('/api/journal-entries/generate', expensiveLimiter);
+app.use('/api/process/batch', expensiveLimiter);
 app.use('/api', apiRouter);
 
 // 静的ファイル配信（本番環境）
@@ -64,18 +100,18 @@ app.get('/health', (req, res) => {
 // エラーハンドリングミドルウェア
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error('エラー:', err);
-  res.status(err.status || 500).json({
+  const statusCode = err.status || 500;
+  res.status(statusCode).json({
+    success: false,
     error: err.message || 'サーバーエラーが発生しました',
-    status: err.status || 500,
   });
 });
 
 // 404ハンドリング
 app.use((req, res) => {
   res.status(404).json({
+    success: false,
     error: 'エンドポイントが見つかりません',
-    path: req.path,
-    method: req.method,
   });
 });
 

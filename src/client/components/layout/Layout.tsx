@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate, useMatch } from 'react-router-dom';
 import {
   Users,
@@ -22,7 +22,7 @@ import {
   ClipboardCheck
 } from 'lucide-react';
 import { useAuth } from '../../main';
-import { auth } from '../../lib/supabase';
+import { auth, supabase } from '../../lib/supabase';
 import { useWorkflow } from '../../context/WorkflowContext';
 
 
@@ -447,6 +447,21 @@ interface LayoutProps {
 }
 
 export default function Layout({ children }: LayoutProps) {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const checkRole = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data } = await supabase.from('users').select('role').eq('id', user.id).single();
+        if (data?.role === 'viewer') {
+          navigate('/upload-only');
+        }
+      }
+    };
+    checkRole();
+  }, [navigate]);
+
   return (
     <div className="h-screen bg-gray-100">
       <div className="flex h-full min-w-[1280px]">
